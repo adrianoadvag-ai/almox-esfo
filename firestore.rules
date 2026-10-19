@@ -1,0 +1,103 @@
+rules_version = '2';
+// Regras de segurança do Almox EsFO (v1.0)
+// Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function emailPM() {
+      return logado() && request.auth.token.email is string
+        && request.auth.token.email.lower().matches('.*@pm[.]pr[.]gov[.]br$');
+    }
+    function verificado() { return emailPM() && request.auth.token.email_verified == true; }
+    function eu() { return get(/databases/$(database)/documents/users/$(uid())).data; }
+    function cadastrado() { return exists(/databases/$(database)/documents/users/$(uid())); }
+    function ativo() { return verificado() && cadastrado() && eu().ativo == true; }
+    function almox() { return ativo() && eu().perfil == 'almox'; }
+    function muda(campos) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(campos); }
+
+    // ---------- Configuração inicial (cria o primeiro almoxarife) ----------
+    match /config/setup {
+      allow read: if true;
+      allow create: if emailPM() && !exists(/databases/$(database)/documents/config/setup)
+                    && existsAfter(/databases/$(database)/documents/users/$(uid()));
+      allow update: if almox();
+      allow delete: if false;
+    }
+
+    // ---------- Numeração das cautelas ----------
+    match /config/contador {
+      allow read: if ativo();
+      allow create: if ativo() && request.resource.data.n == 1;
+      allow update: if ativo() && request.resource.data.n == resource.data.n + 1 && muda(['n']);
+      allow delete: if false;
+    }
+
+    // ---------- Lista resumida de militares (para escolher o destino de uma transferência) ----------
+    match /config/diretorio {
+      allow read: if ativo();
+      allow write: if almox();
+    }
+
+    // ---------- Militares (cadetes, oficiais e almoxarifes) ----------
+    match /users/{id} {
+      allow read: if logado() && (id == uid() || almox());
+      // Autocadastro: sempre pendente e com perfil de cadete; o primeiro almoxarife nasce junto com config/setup.
+      allow create: if emailPM() && id == uid()
+        && request.resource.data.email == request.auth.token.email.lower()
+        && (
+          (request.resource.data.perfil == 'cadete' && request.resource.data.ativo == false && request.resource.data.pendente == true)
+          || (request.resource.data.perfil == 'almox' && request.resource.data.ativo == true
+              && !exists(/databases/$(database)/documents/config/setup)
+              && existsAfter(/databases/$(database)/documents/config/setup))
+        );
+      allow update: if almox()
+        || (logado() && id == uid() && muda(['telefone','romaneio','passkeys','pelotao','turma','ano','atualizadoEm']));
+      allow delete: if almox();
+    }
+
+    // ---------- Catálogo e estoque ----------
+    match /categorias/{id} {
+      allow read: if ativo();
+      allow write: if almox();
+    }
+    match /itens/{id} {
+      allow read: if ativo();
+      allow write: if almox();
+    }
+    match /movimentos/{id} {
+      allow read, create: if almox();
+      allow update, delete: if false;
+    }
+
+    // ---------- Cautelas ----------
+    match /cautelas/{id} {
+      allow read: if almox()
+        || (ativo() && (resource.data.userId == uid() || resource.data.transferPara == uid()));
+
+      allow create: if almox()
+        // Pedido feito pelo app
+        || (ativo() && request.resource.data.userId == uid()
+            && request.resource.data.status == 'solicitada' && request.resource.data.origem == 'app')
+        // Recebimento de uma transferência que foi oferecida a este militar
+        || (ativo() && request.resource.data.userId == uid()
+            && request.resource.data.status == 'cautelada' && request.resource.data.origem == 'transferencia'
+            && get(/databases/$(database)/documents/cautelas/$(request.resource.data.deCautela)).data.transferPara == uid());
+
+      allow update: if almox()
+        || (ativo() && resource.data.userId == uid() && (
+              // cancelar o próprio pedido ainda não separado
+              (resource.data.status == 'solicitada' && request.resource.data.status == 'cancelada' && muda(['status','log']))
+              // assinar o recebimento do material separado
+              || (resource.data.status == 'separada' && resource.data.assinatura == null && muda(['assinatura','log']))
+              // oferecer ou desistir de uma transferência
+              || (resource.data.status == 'cautelada' && muda(['transferPara','transfer','log']))
+           ))
+        // destinatário aceita ou recusa a transferência
+        || (ativo() && resource.data.transferPara == uid() && muda(['transferPara','transfer','itens','status','log']));
+
+      allow delete: if false;
+    }
+  }
+}
