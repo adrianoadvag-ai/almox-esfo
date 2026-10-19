@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.4.2';
+const VERSAO='1.5.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -132,17 +132,47 @@ pf:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8
 const modal=$('#modal');
 if(modal&&typeof modal.showModal!=='function'){
 modal.showModal=function(){this.setAttribute('open','');this.style.cssText='display:block;position:fixed;inset:0;margin:auto;z-index:1000;max-height:92vh;max-width:640px;width:94vw;overflow:auto';};
-modal.close=function(){this.removeAttribute('open');this.style.display='none';};
+modal.close=function(){this.removeAttribute('open');this.style.display='none';this.dispatchEvent(new Event('close'));};
 try{Object.defineProperty(modal,'open',{get(){return this.hasAttribute('open');}});}catch(e){}
 }
+
+/* ============ Botão voltar do celular: cada tela e cada janela entram no histórico do navegador ============ */
+let esperaPop=null,resolvePop=null,fechandoPorPop=false;
+const estadoTela=()=>({almox:1,fase:fase==='cadastro'?'cadastro':null,tela:ui.tela||null,v:ui.view||null,cat:ui.cat||null,matCat:ui.matCat||null});
+const mesmoEstado=(a,b)=>!!a&&!!b&&!a.modal&&['fase','tela','v','cat','matCat'].every(k=>(a[k]||null)===(b[k]||null));
+function marcarTela(substituir){try{const s=estadoTela();if(substituir)history.replaceState(s,'');else if(!mesmoEstado(history.state,s))history.pushState(s,'');}catch(e){}}
+// Janela fechada pelo próprio app (botão, ×, Esc): tira a entrada da janela do histórico
+function sairModalHist(){
+if(resolvePop||fechandoPorPop)return;
+if(history.state&&history.state.modal){esperaPop=new Promise(r=>{resolvePop=r;setTimeout(()=>{if(resolvePop===r){resolvePop=null;esperaPop=null;r();}},800);});try{history.back();}catch(e){const r=resolvePop;resolvePop=null;esperaPop=null;r();}}
+}
+const depoisDoModal=fn=>{if(esperaPop)esperaPop.then(fn);else fn();};
+async function navegar(mudar){
+if(modal.open)closeModal();
+if(esperaPop)await esperaPop;
+mudar();render();marcarTela();window.scrollTo(0,0);
+}
+window.addEventListener('popstate',e=>{
+if(resolvePop){const r=resolvePop;resolvePop=null;esperaPop=null;r();
+if(modal.open)try{history.pushState({...estadoTela(),modal:1},'');}catch(x){}
+return;}
+if(modal.open){fechandoPorPop=true;closeModal();fechandoPorPop=false;return;}
+const s=e.state;if(!s||!s.almox)return;
+if(!sess){
+if(fase==='cadastro'&&s.fase!=='cadastro')fase='login';else if(fase==='login'&&s.fase==='cadastro')fase='cadastro';
+if(fase==='login'||fase==='cadastro'){ui.tela=s.tela;loginMsg='';}
+}else{ui.view=s.v;ui.cat=s.cat;ui.matCat=s.matCat;ui.matQ='';}
+render();window.scrollTo(0,0);
+});
+
 function openModal(title,body,foot,sub){
 modal.innerHTML=`<div class="mh"><div><h2>${title}</h2>${sub?`<p class="muted small">${sub}</p>`:''}</div><button class="x" data-act="fechar" aria-label="Fechar">×</button></div>
 <div class="mb">${body}</div>${foot?`<div class="mf">${foot}</div>`:''}`;
-if(!modal.open)modal.showModal();
+if(!modal.open){modal.showModal();if(!(history.state&&history.state.modal))try{history.pushState({...estadoTela(),modal:1},'');}catch(e){}}
 }
-const closeModal=()=>{if(modal.open)modal.close();assPend=null;};
+const closeModal=()=>{if(modal.open)modal.close();assPend=null;sairModalHist();};
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
-modal.addEventListener('close',()=>{if(fase==='app')render();});
+modal.addEventListener('close',()=>{sairModalHist();if(fase==='app')render();});
 
 /* ============ Ícones das categorias (desenho próprio, traço simples) ============ */
 const CAT_IC={
@@ -156,7 +186,7 @@ espada:['Espada','<path d="M24 4v28"/><path d="M21 7l3-3 3 3"/><path d="M16 32h1
 generico:['Outros','<path d="M8 16l16-8 16 8v18l-16 8-16-8z"/><path d="M8 16l16 8 16-8M24 24v18"/>']
 };
 const icCat=c=>{if(c&&c.icone&&CAT_IC[c.icone])return c.icone;const n=norm(c&&c.nome);
-return /unifor|fard|tunic|farda/.test(n)?'uniforme':/cobert|barret|quepe|bone/.test(n)?'cobertura':/luva/.test(n)?'luvas':/cal[cç]|sapat|bota|coturn/.test(n)?'calcados':
+return /unifor|fard|tunic|desfil|aspirant|gala/.test(n)?'uniforme':/cobert|barret|quepe|bone/.test(n)?'cobertura':/luva/.test(n)?'luvas':/cal[cç]|sapat|bota|coturn/.test(n)?'calcados':
 /insig|distint|plat/.test(n)?'insignias':/espad/.test(n)?'espada':/corre|acess|cinto/.test(n)?'correame':'generico';};
 const svgCat=k=>`<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(CAT_IC[k]||CAT_IC.generico)[1]}</svg>`;
 
@@ -241,7 +271,8 @@ return `<main class="login${almox?' restrito':''}"><div class="login-card">${cab
 ${almox?'<p class="aviso" style="margin-bottom:1rem">A conta do almoxarifado só funciona depois de aprovada pelo responsável pelo almoxarifado.</p>'
 :`<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>`}
 <form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}" data-perfil="${almox?'almox':'cadete'}">
-${camposIdent({},t)}${campoEmailSenha(almox)}
+${camposIdent({},t)}${campoEmailSenha(false)}
+${almox?'<p class="small muted">Já tem conta de cadete com este e-mail? Não precisa de outra: peça ao responsável pelo almoxarifado para dar acesso ao almoxarifado na sua conta (Militares → seu nome → "Tornar almoxarife").</p>':''}
 <p class="small muted">A senha também serve para <b>assinar</b> as cautelas.${almox?'':' Depois de entrar, você completa seus dados e o romaneio em "Meus dados".'}</p>
 <label class="check"><input type="checkbox" name="lgpd" required><span>Autorizo o uso dos meus dados pessoais exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>
 <p class="small muted">Você vai receber um link no e-mail institucional para confirmar a conta. Depois, o almoxarifado libera seu acesso.</p>
@@ -276,8 +307,9 @@ catch(e){ui.telaLogin=null;$('#login-erro').textContent=erroFirebase(e);}
 async function fazerCadastro(form,fd,setup){
 const errEl=$(setup?'#setup-erro':'#cad-erro');const err=m=>{errEl.textContent=m;};
 const perfilF=form.dataset.perfil||'cadete';
-const email=perfilF==='almox'?emailDe(fd.get('email')):String(fd.get('email')||'').trim().toLowerCase();
-if(!dominioOk(email)&&!(perfilF==='almox'&&ehFicticio(email)))return err(perfilF==='almox'?`Use um usuário sem @ (ex.: almox) ou o e-mail institucional (@${DOMINIOS[0]}).`:`Use seu e-mail institucional (@${DOMINIOS[0]}).`);
+// Só a conta criada na configuração inicial pode usar um usuário sem @; pedidos de conta do almoxarifado seguem o cadastro padrão (e-mail institucional + confirmação)
+const email=setup?emailDe(fd.get('email')):String(fd.get('email')||'').trim().toLowerCase();
+if(!dominioOk(email)&&!(setup&&ehFicticio(email)))return err(setup?`Use um usuário sem @ (ex.: almox) ou o e-mail institucional (@${DOMINIOS[0]}).`:`Use seu e-mail institucional (@${DOMINIOS[0]}).`);
 if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
 const tipo=form.dataset.tipo||'cadete',perfil=form.dataset.perfil||'cadete';
 const dados=lerDados(fd,tipo);
@@ -407,7 +439,7 @@ try{
 await runTransaction(db,async tx=>{const num=await proxNumero(tx);const ref=doc(collection(db,'cautelas'));
 tx.set(ref,{num,userId:sess.userId,origem:'app',status:'solicitada',itens,obs,prazo:null,assinatura:null,transferPara:null,transfer:null,
 criadoEm:nowISO(),atualizadoEm:nowISO(),log:[entrada('Solicitada',obs)]});});
-ui.cart=[];closeModal();ui.view='ini';render();toast('Pedido enviado ao almoxarifado.');
+ui.cart=[];closeModal();ui.view='ini';render();depoisDoModal(()=>marcarTela(true));toast('Pedido enviado ao almoxarifado.');
 pedirNotificacao();
 }catch(e){console.error(e);const el=$('#ped-erro');if(el)el.textContent=erroFirebase(e);}
 }
@@ -474,6 +506,7 @@ ${a?`<dt>Assinatura</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>
 ${c.obs?`<dt>Obs.</dt><dd>${esc(c.obs)}</dd>`:''}
 ${c.transferPara?`<dt>Transferência</dt><dd>oferecida a ${esc(nomeM(c.transferPara))}, aguardando aceite</dd>`:''}</dl></div>
 ${(c.ocorrencias||[]).length?`<div class="sec-h"><h3>Ocorrências na devolução</h3></div><ul class="feed">${c.ocorrencias.map(o=>`<li>${o.qtd}× ${esc(o.nome)}${tamTxt(o.tam)?' ('+esc(o.tam)+')':''} – <b class="c-stamp">${esc(o.estado)}</b>${o.obs?' – '+esc(o.obs):''}<time>${fmt(o.t)}</time></li>`).join('')}</ul>`:''}
+${(c.devolucoes||[]).length?`<div class="sec-h"><h3>Devoluções assinadas (descautela)</h3></div><ul class="feed">${c.devolucoes.map(d=>`<li><b>${esc(d.material)}</b>${d.obs?'<br><span class="small">'+esc(d.obs)+'</span>':''}<br><span class="small">Assinada por ${esc(nomeM(d.militar.por))} (militar) e por ${esc(nomeM(d.almox.por))} (almoxarifado)</span><time>${fmt(d.em)}</time></li>`).join('')}</ul>`:''}
 <div class="sec-h"><h3>Histórico</h3></div><ul class="feed">${(c.log||[]).slice().reverse().map(x=>`<li><b>${esc(x.a)}</b> – ${esc(nomeM(x.por))}${x.obs?`<br><span class="small">${esc(x.obs)}</span>`:''}<time>${fmt(x.t)}</time></li>`).join('')}</ul>`,acoes);
 }
 async function cancelarPedido(id){
@@ -615,7 +648,7 @@ const cauteladoDe=(itemId,tam)=>ativasA().reduce((a,c)=>a+(c.itens||[]).filter(l
 const separadoDe=(itemId,tam)=>separadas().reduce((a,c)=>a+(c.itens||[]).filter(l=>l.itemId===itemId&&l.tam===tam).reduce((b,l)=>b+l.qtd,0),0);
 function vAdmin(){
 const v=ui.view||'painel';const u=me();
-const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Em uso',ativasA().filter(atrasada).length],
+const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Cautelas',ativasA().filter(atrasada).length],
 ['material','Material',0],['militares','Militares',pendCad().length],['hist','Histórico',0],['rel','Relatórios',0]];
 const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial():v==='militares'?vMilitares():v==='hist'?vHist():v==='rel'?vRelatorios():vPainel();
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
@@ -651,7 +684,7 @@ function vEmUso(){
 const q=norm(ui.q);
 let l=ativasA().filter(c=>!q||norm(nomeM(c.userId)+' '+turmaU(user(c.userId))+' '+itensTxt(c)+' '+c.num).includes(q));
 l.sort((a,b)=>(atrasada(b)-atrasada(a))||String(a.prazo||'9').localeCompare(String(b.prazo||'9')));
-return `<div class="a-head"><div><h1>Material em uso</h1><p>${l.length} cautela(s) ativas</p></div><button class="btn" data-act="csvUso">Exportar planilha (CSV)</button></div>
+return `<div class="a-head"><div><h1>Cautelas</h1><p>${l.length} cautela(s) ativa(s): material que está com os militares</p></div><button class="btn" data-act="csvUso">Exportar planilha (CSV)</button></div>
 <div class="filters"><input class="i" data-inp="q" placeholder="Buscar por militar, pelotão, item ou nº" value="${esc(ui.q)}"></div>
 <div class="tbl-wrap"><table><thead><tr><th>Nº</th><th>Militar</th><th>Material</th><th>Desde</th><th>Devolver até</th></tr></thead><tbody>
 ${l.map(c=>`<tr class="hov" data-act="ver" data-id="${c.id}"><td class="mono">${nr(c.num)}</td><td>${esc(nomeM(c.userId))}<br><span class="small muted">${esc(turmaU(user(c.userId)))}</span></td>
@@ -812,13 +845,33 @@ ${ls.map(({l,i})=>`<div class="linha-item"><span class="nm">${esc(l.nome)}${tamT
 <select class="i estado-sel" name="e${i}"><option value="bom">Em bom estado</option><option value="danificado">Danificado / inservível</option><option value="extraviado">Extraviado (não devolvido)</option></select></div>`).join('')}
 <label class="f"><span>Observação (obrigatória se houver dano ou extravio)</span><input class="i" name="obs"></label>
 <p class="small muted">Peças em bom estado voltam para a prateleira. Danificadas ou extraviadas saem do estoque e ficam registradas como ocorrência.</p>
-<p class="erro" id="dev-erro"></p></form>`,`<button class="btn" data-act="fechar">Voltar</button><button class="btn btn-pri" data-act="confirmarDev" data-id="${c.id}">Registrar devolução</button>`);
+<div class="ass-box stack"><span class="sep-lbl">Assinaturas da devolução (descautela)</span>
+<p class="aviso">Entregue o aparelho ao militar. Ao digitar a senha, ${esc(nomeU(u))} confirma a devolução do material acima, no estado informado.</p>
+<label class="f"><span>Senha do Almox EsFO de ${esc(nomeU(u))}</span><input class="i" type="password" name="sMil" autocomplete="off"></label>
+<label class="f"><span>Sua senha (${esc(nomeM(sess.userId))}, responsável pelo recebimento)</span><input class="i" type="password" name="sAlm" autocomplete="current-password"></label></div>
+<p class="erro" id="dev-erro"></p></form>`,`<button class="btn" data-act="fechar">Voltar</button><button class="btn btn-pri" data-act="confirmarDev" data-id="${c.id}">Assinar e registrar devolução</button>`);
 }
 async function confirmarDev(id){
 const c=C(id);const f=$('#f-dev');if(!c||!f)return;const fd=new FormData(f);const obs=String(fd.get('obs')||'').trim();
 const mov=(c.itens||[]).map((l,i)=>({i,q:Math.min(int(fd.get('q'+i)),pend(l)),e:String(fd.get('e'+i)||'bom')})).filter(x=>x.q>0);
 if(!mov.length){$('#dev-erro').textContent='Informe a quantidade devolvida.';return;}
 if(mov.some(x=>x.e!=='bom')&&!obs){$('#dev-erro').textContent='Descreva o dano ou o extravio na observação.';return;}
+const sMil=String(fd.get('sMil')||''),sAlm=String(fd.get('sAlm')||'');
+if(!sMil||!sAlm){$('#dev-erro').textContent='A devolução precisa das duas assinaturas: a senha do militar e a sua.';return;}
+const um=user(c.userId);
+const txtDev=mov.map(x=>{const l=c.itens[x.i];return `${x.q}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}${x.e!=='bom'?' – '+x.e:''}`;}).join(', ');
+// 1) senha do militar, digitada no aparelho do almoxarifado (não troca a sessão atual)
+try{await comAuthSecundario(a2=>signInWithEmailAndPassword(a2,um.email,sMil));}
+catch(e){$('#dev-erro').textContent=e.code==='auth/too-many-requests'?erroFirebase(e):`Senha de ${nomeU(um)} incorreta. Peça para digitar de novo.`;return;}
+// 2) senha do responsável pelo almoxarifado
+try{const a=auth.currentUser;await reauthenticateWithCredential(a,EmailAuthProvider.credential(a.email,sAlm));}
+catch(e){$('#dev-erro').textContent=(e.code==='auth/invalid-credential'||e.code==='auth/wrong-password')?'A sua senha (responsável) está incorreta.':erroFirebase(e);return;}
+const emA=nowISO();
+const dMil=`ALMOX ESFO | Devolução (descautela) | Cautela ${nr(c.num)} | Entregue por ${nomeU(um)} | Material: ${txtDev} | ${emA}`;
+const dAlm=`ALMOX ESFO | Recebimento da devolução | Cautela ${nr(c.num)} | Recebido por ${nomeM(sess.userId)} de ${nomeU(um)} | Material: ${txtDev} | ${emA}`;
+const assDev={em:emA,material:txtDev,obs,
+militar:{por:c.userId,em:emA,metodo:'balcao',dados:dMil,hash:await hashTexto(dMil),aparelho:navigator.userAgent.slice(0,160)},
+almox:{por:sess.userId,em:emA,metodo:'senha',dados:dAlm,hash:await hashTexto(dAlm),aparelho:navigator.userAgent.slice(0,160)}};
 try{await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',id);const o=(await tx.get(cref)).data();if(!o||o.status!=='cautelada')throw {msg:'A cautela mudou de situação.'};
 const itens=o.itens.map(l=>({...l}));const ids=[...new Set(mov.map(x=>itens[x.i].itemId))];const sn={};for(const iid of ids)sn[iid]=(await tx.get(doc(db,'itens',iid))).data();
 const ocorr=[...(o.ocorrencias||[])];const em=nowISO();
@@ -828,7 +881,8 @@ if(x.e==='bom')s.disp+=q;else{s.total=Math.max(0,s.total-q);ocorr.push({t:em,nom
 ids.forEach(iid=>tx.update(doc(db,'itens',iid),{estoque:sn[iid]._e}));
 const resta=itens.some(l=>pend(l)>0);
 const txt=mov.map(x=>`${x.q}× ${itens[x.i].nome}${tamTxt(itens[x.i].tam)?' ('+itens[x.i].tam+')':''}${x.e!=='bom'?' – '+x.e:''}`).join(', ');
-tx.update(cref,{itens,ocorrencias:ocorr,status:resta?'cautelada':'devolvida',atualizadoEm:em,...(resta?{}:{devolvidaEm:em}),log:[...(o.log||[]),entrada(resta?'Devolução parcial':'Devolvida',txt+(obs?' | '+obs:''))]});
+tx.update(cref,{itens,ocorrencias:ocorr,devolucoes:[...(o.devolucoes||[]),assDev],status:resta?'cautelada':'devolvida',atualizadoEm:em,...(resta?{}:{devolvidaEm:em}),
+log:[...(o.log||[]),entrada(resta?'Devolução parcial':'Devolvida',txt+(obs?' | '+obs:'')+' | Assinada pelo militar e pelo responsável')]});
 mov.filter(x=>x.e!=='bom').forEach(x=>{tx.set(doc(collection(db,'movimentos')),{t:em,tipo:'ocorrencia',itemId:itens[x.i].itemId,nome:itens[x.i].nome,tam:itens[x.i].tam,qtd:x.q,motivo:x.e,obs,cautela:id,num:o.num,userId:o.userId,por:sess.userId});});
 });closeModal();toast('Devolução registrada.');}catch(e){console.error(e);$('#dev-erro').textContent=erroFirebase(e);}
 }
@@ -1162,14 +1216,15 @@ catch(e){console.error(e);migrando=false;}
 
 /* ============ Eventos ============ */
 const acts={
-go:el=>{ui.view=el.dataset.v;closeModal();render();window.scrollTo(0,0);},
+go:el=>navegar(()=>{ui.view=el.dataset.v;}),
 fechar:closeModal,
 recarregar:()=>location.reload(),
 sair:async()=>{closeModal();ui.view=null;ui.cart=[];await signOut(auth);},
 tema:el=>{temaAtual=el.dataset.tema;try{localStorage.setItem('almox.tema',temaAtual);}catch(e){}aplicarTema(temaAtual);$$('.tema-sel button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tema===temaAtual));},
-irCadastro:el=>{loginMsg='';ui.cadPerfil=el.dataset.p||'cadete';fase='cadastro';render();},
-tela:el=>{ui.tela=el.dataset.t;loginMsg='';fase='login';render();},
-irLogin:()=>{fase='login';render();},
+irCadastro:el=>navegar(()=>{loginMsg='';ui.cadPerfil=el.dataset.p||'cadete';fase='cadastro';}),
+tela:el=>{if(el.dataset.t==='cadete'&&history.state&&history.state.tela==='almox'&&!history.state.fase){history.back();return;}
+navegar(()=>{ui.tela=el.dataset.t;loginMsg='';fase='login';});},
+irLogin:()=>{if(history.state&&history.state.fase==='cadastro'){history.back();return;}fase='login';render();marcarTela(true);},
 cadTipo:el=>{ui.cadTipo=el.dataset.t;render();},
 esqueci:()=>openModal('Esqueci minha senha',`<form id="f-esq" class="stack"><label class="f"><span>E-mail institucional</span><input class="i" name="email" type="text" required autocapitalize="off"></label>
 <p class="erro" id="esq-erro"></p><button class="btn btn-pri btn-block">Enviar link para nova senha</button></form>`),
@@ -1213,8 +1268,8 @@ prazo:el=>editarPrazo(el.dataset.id),
 novaCat:()=>formCat(null),
 editCat:el=>formCat(D.cats.find(c=>c.id===el.dataset.id)),
 novoItem:el=>{if(!D.cats.length){toast('Crie uma categoria primeiro.',true);return;}formItem(null,el.dataset.cat||ui.matCat||'');},
-matCat:el=>{ui.matCat=el.dataset.id||null;ui.matQ='';render();window.scrollTo(0,0);},
-catSol:el=>{ui.cat=el.dataset.id||null;render();window.scrollTo(0,0);},
+matCat:el=>{const id=el.dataset.id||null;if(!id&&!modal.open&&history.state&&history.state.matCat){history.back();return;}navegar(()=>{ui.matCat=id;ui.matQ='';});},
+catSol:el=>{const id=el.dataset.id||null;if(!id&&!modal.open&&history.state&&history.state.cat){history.back();return;}navegar(()=>{ui.cat=id;});},
 editItem:el=>formItem(item(el.dataset.id)),
 entrada:el=>formEntrada(el.dataset.id),
 ajuste:el=>{ui.ajModo='baixa';formAjuste(el.dataset.id);},
@@ -1230,7 +1285,7 @@ perfilMil:el=>perfilMil(el.dataset.id),
 nadaConsta:el=>nadaConstaPDF(el.dataset.id),
 importar:()=>abrirImportar(),
 modeloImp:()=>baixarModelo(),
-impModo:el=>{ui.impModo=el.dataset.m;$$('#f-imp .seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===ui.impModo));if(ui.imp)desenharPreviaImp();},
+impModo:el=>{ui.impModo=el.dataset.m;$$('#f-imp .seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===ui.impModo));const aj=$('#imp-modo-ajuda');if(aj)aj.textContent=ajudaModoImp();if(ui.imp)desenharPreviaImp();},
 confirmarImp:()=>confirmarImp(),
 histTudo:carregarHistTudo,
 csvUso:csvUso,csvHist:csvHist,csvMil:csvMil,backup:backup
@@ -1337,7 +1392,7 @@ async function aoMudarLogin(u){
 if(bootstrapping)return;
 pararEscutas();closeModal();if(aguardandoUnsub){aguardandoUnsub();aguardandoUnsub=null;}
 try{
-if(!u){sess=null;D=D0();const f=(await setupFeito())?'login':'setup';fase=(fase==='cadastro'&&f==='login')?fase:f;render();return;}
+if(!u){sess=null;D=D0();const f=(await setupFeito())?'login':'setup';fase=(fase==='cadastro'&&f==='login')?fase:f;render();marcarTela(true);return;}
 if(!u.emailVerified&&!ehFicticio(u.email)){fase='verificar';render();return;}
 fase='carregando';render();
 const s=await getDoc(doc(db,'users',u.uid));
@@ -1350,7 +1405,7 @@ return;}
 if(!x.ativo){loginMsg='Seu acesso está bloqueado. Procure o almoxarifado.';await signOut(auth);return;}
 if(ui.telaLogin==='almox'&&x.perfil!=='almox'){ui.telaLogin=null;loginMsg='Esta conta não é do almoxarifado. Use o acesso dos cadetes.';await signOut(auth);return;}
 ui.telaLogin=null;
-sess={userId:u.uid};D=D0();D.eu={id:u.uid,...x};D.users=[D.eu];ui.view=null;
+sess={userId:u.uid};D=D0();D.eu={id:u.uid,...x};D.users=[D.eu];ui.view=null;ui.cat=null;ui.matCat=null;marcarTela(true);
 escutar(x.perfil);
 }catch(e){console.error(e);erroMsg=erroFirebase(e);fase='erro';render();}
 }
@@ -1372,7 +1427,7 @@ $('#app').innerHTML=html;
 document.title=sess&&fase==='app'?`${NOME}${ehAlmox()&&solicitadas().length?' ('+solicitadas().length+')':''}`:`${NOME} – Cautela de Materiais`;
 if(keep){const el=document.querySelector(`[data-inp="${keep}"]`);if(el){el.focus();try{el.setSelectionRange(pos,pos);}catch(e){}}}
 }
-render();
+render();marcarTela(true);
 if(configurado){
 try{
 app=initializeApp(FB);auth=getAuth(app);try{auth.useDeviceLanguage();}catch(e){}
@@ -1522,6 +1577,9 @@ T.kv('Devolver até',c.prazo?fmtD(c.prazo):'Sem prazo definido');T.kv('Situaçã
 T.secao('Material');T.tabela([{t:'Item',w:5},{t:'Tamanho',w:1.4},{t:'Qtd',w:.8,a:'r'},{t:'Devolvido',w:1.2,a:'r'},{t:'Transferido',w:1.3,a:'r'}],(c.itens||[]).map(x=>[x.nome+(x.consumo?' (entrega definitiva)':''),tamTxtPdf(x.tam),x.qtd,x.dev||0,x.trf||0]));
 T.texto(`Declaro que recebi do Almoxarifado da Escola de Formação de Oficiais o material acima relacionado, em perfeitas condições de uso, comprometendo-me a zelar por sua guarda e conservação e a devolvê-lo ${c.prazo?'até '+fmtD(c.prazo):'quando solicitado'}, ciente de que responderei pelo extravio ou dano causado por mau uso.`,{s:9.5});
 T.secao('Assinatura eletrônica');T.kv('Assinado por',nomeM(a.por||c.userId));T.kv('Data e hora',fmt(a.em));T.kv('Forma',FORMA[a.metodo]||a.metodo||'');T.kv('Código (SHA-256)',a.hash);T.kv('Texto assinado',a.dados);
+(c.devolucoes||[]).forEach((d,i)=>{T.secao(`Devolução (descautela)${c.devolucoes.length>1?' '+(i+1):''}`,fmt(d.em));T.kv('Material devolvido',d.material);T.kv('Observação',d.obs);
+T.kv('Militar',`${nomeM(d.militar.por)} – ${FORMA.balcao}`);T.kv('Código do militar',d.militar.hash);
+T.kv('Almoxarifado',`${nomeM(d.almox.por)} – com a senha do Almox EsFO`);T.kv('Código do almoxarifado',d.almox.hash);});
 if((c.log||[]).length){T.secao('Andamento');T.tabela([{t:'Data',w:1.5},{t:'Evento',w:2.2},{t:'Por',w:2},{t:'Observação',w:3.5}],c.log.map(x=>[fmt(x.t),x.a,nomeM(x.por),x.obs||'']));}
 });
 }
@@ -1566,7 +1624,8 @@ ui.imp=null;
 openModal('Importar material de planilha',`<form id="f-imp" class="stack">
 <p class="small">Use uma planilha do Excel com as colunas <b>Categoria, Item, Tamanho e Quantidade</b> (Unidade, Romaneio e Entrega definitiva são opcionais). <button type="button" class="link" data-act="modeloImp">Baixar planilha modelo</button></p>
 <label class="f"><span>Arquivo (.xlsx, .xls ou .csv)</span><input class="i" type="file" id="imp-arq" accept=".xlsx,.xls,.csv" data-chgimp="1"></label>
-<div class="seg" role="group"><button type="button" data-act="impModo" data-m="somar" aria-pressed="${(ui.impModo||'somar')==='somar'}">Somar ao estoque (entrada)</button><button type="button" data-act="impModo" data-m="substituir" aria-pressed="${ui.impModo==='substituir'}">Substituir pela planilha (inventário)</button></div>
+<div class="seg seg3" role="group"><button type="button" data-act="impModo" data-m="somar" aria-pressed="${(ui.impModo||'somar')==='somar'}">Somar ao estoque (entrada)</button><button type="button" data-act="impModo" data-m="substituir" aria-pressed="${ui.impModo==='substituir'}">Substituir pela planilha (inventário)</button><button type="button" data-act="impModo" data-m="recomecar" aria-pressed="${ui.impModo==='recomecar'}">Zerar tudo e carregar a planilha</button></div>
+<p class="small muted" id="imp-modo-ajuda">${ajudaModoImp()}</p>
 <div id="imp-previa"><p class="small muted">Escolha o arquivo para ver a prévia. Nada é gravado antes de você confirmar.</p></div>
 <label class="f"><span>Origem / documento</span><input class="i" name="obs" placeholder="Ex.: Inventário inicial 2026"></label>
 <p class="erro" id="imp-erro"></p></form>`,`<button class="btn" data-act="fechar">Cancelar</button><button class="btn btn-pri" data-act="confirmarImp" id="imp-ok" disabled>Importar</button>`);
@@ -1599,29 +1658,53 @@ if(!it&&!novosItens[chave(l.cat)+chave(l.nome)]){st.push('novo item');novosItens
 else if(it&&!(it.tamanhos||[]).includes(l.tam))st.push('novo tamanho');
 const atual=it?est(it,l.tam).disp:0;return {...l,c,it,st,atual};});
 }
+function ajudaModoImp(){const m=ui.impModo||'somar';
+return m==='somar'?'As quantidades da planilha são somadas ao que já existe na prateleira.'
+:m==='substituir'?'Os itens da planilha passam a ter exatamente a quantidade informada; os demais itens não mudam.'
+:'Zera o estoque de todo o almoxarifado e carrega só a planilha. Itens e categorias que não estão nela são apagados (os que têm peças cauteladas ficam fora do app até a devolução). As cautelas e o histórico não são apagados.';}
+const usoItem=it=>(it.tamanhos||[]).reduce((a,t)=>a+cauteladoDe(it.id,t)+separadoDe(it.id,t),0);
+function sobrasRecomecar(p){
+const usados=new Set(p.filter(l=>l.it).map(l=>l.it.id));const fora=D.itens.filter(i=>!usados.has(i.id));
+return {apagar:fora.filter(i=>!usoItem(i)),manter:fora.filter(i=>usoItem(i)>0)};
+}
 function desenharPreviaImp(){
-const p=planoImp();const modo=ui.impModo||'somar';
+const p=planoImp();const modo=ui.impModo||'somar';const sob=modo==='recomecar'?sobrasRecomecar(p):null;
 $('#imp-previa').innerHTML=`<p class="small"><b>${esc(ui.imp.arq)}</b>: ${p.length} linha(s)${ui.imp.erros.length?` · <span class="c-stamp">${ui.imp.erros.length} ignorada(s)</span>`:''}</p>
+${sob?`<p class="aviso small">Estoque atual será zerado. ${sob.apagar.length} item(ns) que não estão na planilha serão apagados${sob.manter.length?` e ${sob.manter.length} ficarão fora do app por ter peças cauteladas (${sob.manter.map(i=>esc(i.nome)).join(', ')})`:''}.</p>`:''}
 <div class="tbl-wrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Categoria</th><th>Item</th><th>Tam.</th><th>Prateleira hoje</th><th>${modo==='somar'?'Entrada':'Nova contagem'}</th><th></th></tr></thead><tbody>
-${p.map(l=>`<tr><td>${esc(l.cat)}</td><td>${esc(l.nome)}</td><td>${esc(l.tam)}</td><td>${l.atual}</td><td><b>${modo==='somar'?'+'+l.q:l.q}</b></td><td>${l.st.map(s=>`<span class="tag">${s}</span>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>
+${p.map(l=>`<tr><td>${esc(l.cat)}</td><td>${esc(l.nome)}</td><td>${esc(l.tam)}</td><td>${l.atual}</td><td><b>${modo==='somar'?'+'+l.q:l.q}</b> ${esc((UNID[l.unidade]||UNID.un)[l.q===1?0:1])}</td><td>${l.st.map(s=>`<span class="tag">${s}</span>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>
 ${ui.imp.erros.length?`<p class="small c-stamp">${ui.imp.erros.map(esc).join('<br>')}</p>`:''}`;
 const b=$('#imp-ok');if(b)b.disabled=!p.length;
 }
 async function confirmarImp(){
 if(!ui.imp)return;const modo=ui.impModo||'somar';const obs=String(($('#f-imp [name=obs]')||{}).value||'').trim()||('Planilha '+ui.imp.arq);
-const p=planoImp();const b=writeBatch(db);const catIds={},itens={};let ordC=(D.cats.length+1)*10;
+const p=planoImp();const rec=modo==='recomecar';const sob=rec?sobrasRecomecar(p):null;
+if(rec&&!confirm(`Zerar todo o estoque e carregar ${p.length} linha(s) da planilha?\n\n${sob.apagar.length} item(ns) que não estão na planilha serão apagados${sob.manter.length?`; ${sob.manter.length} com peças cauteladas ficarão fora do app`:''}. As cautelas e o histórico continuam guardados.`))return;
+const b=writeBatch(db);const catIds={},itens={};let ordC=(D.cats.length+1)*10;const em=nowISO();
+// No modo "zerar tudo", cada tamanho fica só com as peças que estão com os militares (cauteladas ou separadas)
+const base=it=>{const e={},t=[];(it.tamanhos||[]).forEach(tt=>{const u=cauteladoDe(it.id,tt)+separadoDe(it.id,tt);if(u>0){e[tt]={total:u,disp:0};t.push(tt);}});return {e,t};};
 p.forEach(l=>{
 let cid=l.c?l.c.id:catIds[chave(l.cat)];
 if(!cid){cid=uidNovo();catIds[chave(l.cat)]=cid;const nc={id:cid,nome:l.cat};b.set(doc(db,'categorias',cid),{nome:l.cat,ordem:ordC,icone:icCat(nc)});ordC+=10;}
 const ki=cid+'|'+chave(l.nome);
-if(!itens[ki]){const it=l.it;itens[ki]=it?{id:it.id,novo:false,o:{tamanhos:[...(it.tamanhos||[])],estoque:JSON.parse(JSON.stringify(it.estoque||{}))},nome:it.nome}
-:{id:uidNovo(),novo:true,nome:l.nome,o:{catId:cid,nome:l.nome,unidade:l.unidade,campo:l.campo,tamanhos:[],estoque:{},consumo:l.consumo,ativo:true,ordem:D.itens.filter(i=>i.catId===cid).length*10},mov:{}};itens[ki].mov=itens[ki].mov||{};}
+if(!itens[ki]){const it=l.it;
+if(it&&rec){const z=base(it);itens[ki]={id:it.id,novo:false,cid,o:{tamanhos:z.t,estoque:z.e},extra:{unidade:l.unidade,campo:l.campo,consumo:l.consumo,ativo:true},nome:it.nome};}
+else itens[ki]=it?{id:it.id,novo:false,cid,o:{tamanhos:[...(it.tamanhos||[])],estoque:JSON.parse(JSON.stringify(it.estoque||{}))},nome:it.nome}
+:{id:uidNovo(),novo:true,cid,nome:l.nome,o:{catId:cid,nome:l.nome,unidade:l.unidade,campo:l.campo,tamanhos:[],estoque:{},consumo:l.consumo,ativo:true,ordem:Object.values(itens).filter(y=>y.cid===cid).length*10+(rec?0:D.itens.filter(i=>i.catId===cid).length*10)}};
+itens[ki].mov=itens[ki].mov||{};}
 const x=itens[ki];if(!x.o.tamanhos.includes(l.tam))x.o.tamanhos.push(l.tam);
 const e=x.o.estoque[l.tam]||{total:0,disp:0};
-if(modo==='somar'){e.total+=l.q;e.disp+=l.q;x.mov[l.tam]=(x.mov[l.tam]||0)+l.q;}else{const d=l.q-e.disp;e.disp=l.q;e.total=Math.max(0,e.total+d);x.mov[l.tam]=d;}
+if(modo==='somar'||rec){e.total+=l.q;e.disp+=l.q;x.mov[l.tam]=(x.mov[l.tam]||0)+l.q;}else{const d=l.q-e.disp;e.disp=l.q;e.total=Math.max(0,e.total+d);x.mov[l.tam]=d;}
 x.o.estoque[l.tam]=e;});
 Object.values(itens).forEach(x=>{if(x.o.tamanhos.length>1&&!((x.o.estoque['Único']||{}).total>0)){x.o.tamanhos=x.o.tamanhos.filter(t=>t!=='Único');delete x.o.estoque['Único'];}
-if(x.novo)b.set(doc(db,'itens',x.id),x.o);else b.update(doc(db,'itens',x.id),{tamanhos:x.o.tamanhos,estoque:x.o.estoque});
-b.set(doc(collection(db,'movimentos')),{t:nowISO(),tipo:modo==='somar'?'entrada':'inventario',itemId:x.id,nome:x.nome,tams:x.mov,obs:obs+' (importação)',por:sess.userId});});
-try{await b.commit();closeModal();ui.imp=null;toast(`Importação concluída: ${p.length} linha(s).`);}catch(e){$('#imp-erro').textContent=erroFirebase(e);}
+if(x.novo)b.set(doc(db,'itens',x.id),x.o);else b.update(doc(db,'itens',x.id),{tamanhos:x.o.tamanhos,estoque:x.o.estoque,...(x.extra||{})});
+b.set(doc(collection(db,'movimentos')),{t:em,tipo:modo==='somar'?'entrada':'inventario',itemId:x.id,nome:x.nome,tams:x.mov,obs:obs+(rec?' (estoque zerado e recarregado pela planilha)':' (importação)'),por:sess.userId});});
+if(rec){
+sob.apagar.forEach(it=>{b.delete(doc(db,'itens',it.id));b.set(doc(collection(db,'movimentos')),{t:em,tipo:'remocao',itemId:it.id,nome:it.nome,tams:{},obs:obs+' (item fora da planilha, apagado)',por:sess.userId});});
+sob.manter.forEach(it=>{const z=base(it);b.update(doc(db,'itens',it.id),{estoque:z.e,ativo:false});
+b.set(doc(collection(db,'movimentos')),{t:em,tipo:'inventario',itemId:it.id,nome:it.nome,tams:{},obs:obs+' (item fora da planilha: zerado e retirado do app; há peças cauteladas)',por:sess.userId});});
+const catsVivas=new Set([...Object.values(itens).map(x=>x.cid),...sob.manter.map(i=>i.catId)]);
+D.cats.filter(c=>!catsVivas.has(c.id)).forEach(c=>b.delete(doc(db,'categorias',c.id)));
+}
+try{await b.commit();closeModal();ui.imp=null;ui.matCat=null;toast(rec?`Estoque recarregado: ${p.length} linha(s) da planilha.`:`Importação concluída: ${p.length} linha(s).`);}catch(e){$('#imp-erro').textContent=erroFirebase(e);}
 }

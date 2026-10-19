@@ -1,5 +1,5 @@
 rules_version = '2';
-// Regras de segurança do Almox EsFO (v1.3)
+// Regras de segurança do Almox EsFO (v1.5)
 // Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -52,7 +52,9 @@ service cloud.firestore {
       // Autocadastro: sempre pendente (cadete, oficial ou pedido de conta do almoxarifado); o primeiro almoxarife nasce junto com config/setup.
       // Cadastro feito pelo almoxarife (oficial de fora da EsFO)
       allow create: if almox();
-      allow create: if (emailPM() || (emailInterno() && request.resource.data.perfil == 'almox')) && id == uid()
+      // Conta por usuário (sem e-mail) só na configuração inicial; os demais pedidos de conta usam o e-mail institucional
+      allow create: if (emailPM() || (emailInterno() && request.resource.data.perfil == 'almox'
+                                      && !exists(/databases/$(database)/documents/config/setup))) && id == uid()
         && request.resource.data.email == request.auth.token.email.lower()
         && (
           (request.resource.data.perfil in ['cadete', 'almox'] && request.resource.data.ativo == false && request.resource.data.pendente == true)

@@ -417,6 +417,9 @@ tr.cat-row td{background:var(--surface-2);font-weight:600;font-size:.82rem;color
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{border:0;background:var(--surface);padding:.45rem .8rem;cursor:pointer;min-height:38px}
 .seg button[aria-pressed="true"]{background:var(--olive);color:var(--olive-ink);font-weight:600}
+.seg.seg3{display:flex;flex-wrap:wrap}
+.seg.seg3 button{flex:1 1 9rem;font-size:.85rem;line-height:1.2}
+.seg.seg3 button[data-m="recomecar"][aria-pressed="true"]{background:var(--stamp,#b3261e);color:#fff}
 .estado-sel{min-width:130px}
 .dir-lista label[hidden],[hidden]{display:none!important}
 .linha-item{grid-template-columns:1fr 150px 84px auto}
