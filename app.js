@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.2.0';
+const VERSAO='1.3.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -20,11 +20,16 @@ let erroMsg='',loginMsg='';
 const D0=()=>({users:[],cats:[],itens:[],cautelas:[],trfIn:[],dir:[],dirDoc:null,setup:null,eu:null});
 let D=D0();
 let sess=null,bootstrapping=false,unsubs=[],loaded={},aguardandoUnsub=null;
-const ui={modo:(()=>{try{return localStorage.getItem('almox.modo')||'almox';}catch(e){return 'almox';}})(),view:null,cart:[],cat:null,q:'',hq:'',mq:'',matQ:'',histTudo:false,cadTipo:'cadete'};
+const ui={view:null,cart:[],cat:null,q:'',hq:'',mq:'',matQ:'',histTudo:false,cadTipo:'cadete'};
 const baldes={ativas:[],recentes:[],tudo:[],minhas:[]};
 const HIST_DIAS=90;
 
 /* ============ Utilidades ============ */
+/* Contas do almoxarifado podem usar um usuário (ex.: "almox"), como a Furrielação no SICAM: vira um e-mail interno, sem confirmação */
+const DOMF='@almox.esfo';
+const normLogin=s=>String(s||'').trim().toLowerCase().replace(/\s+/g,'');
+const emailDe=x=>{const t=normLogin(x);return t.includes('@')?t:t+DOMF;};
+const ehFicticio=email=>String(email||'').toLowerCase().endsWith(DOMF);
 const dominioOk=email=>DOMINIOS.some(d=>String(email||'').toLowerCase().trim().endsWith('@'+d));
 const b64u=buf=>{const b=new Uint8Array(buf);let t='';for(let i=0;i<b.length;i++)t+=String.fromCharCode(b[i]);return btoa(t).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
 const ub64u=x=>{x=x.replace(/-/g,'+').replace(/_/g,'/');x+='='.repeat((4-x.length%4)%4);return Uint8Array.from(atob(x),c=>c.charCodeAt(0));};
@@ -139,6 +144,22 @@ const closeModal=()=>{if(modal.open)modal.close();assPend=null;};
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
 modal.addEventListener('close',()=>{if(fase==='app')render();});
 
+/* ============ Ícones das categorias (desenho próprio, traço simples) ============ */
+const CAT_IC={
+uniforme:['Uniforme','<path d="M17 6l7 4 7-4 10 6-4 10-4-2v22H15V20l-4 2-4-10z"/><path d="M24 10v32"/><circle cx="27.5" cy="17" r="1.3" fill="currentColor"/><circle cx="27.5" cy="25" r="1.3" fill="currentColor"/><circle cx="27.5" cy="33" r="1.3" fill="currentColor"/>'],
+cobertura:['Cobertura','<path d="M15 14h18l-2 20H17z"/><path d="M11 34q13 7 26 0"/><path d="M24 14V8"/><circle cx="24" cy="6" r="2.4"/><circle cx="24" cy="24" r="3.2"/>'],
+luvas:['Luvas','<path d="M17 42V25q-3-4-5-6.5-1.6-2.6 1-3.3 2-.3 5 4.3V11a2 2 0 0 1 4 0v9V8a2 2 0 0 1 4 0v12V10a2 2 0 0 1 4 0v11-7a2 2 0 0 1 4 0v16q0 8-4 12z"/><path d="M17 36h14"/>'],
+calcados:['Calçados','<path d="M6 32v-9q0-4 4-4h8q4 6 12 8l8 2q4 1 4 5v1H6z"/><path d="M6 38h36"/><path d="M19 23l4-2M22 26l4-2"/>'],
+insignias:['Insígnias','<path d="M24 6l4.5 11 11.5.5-9 7.5 3 12-10-6.5-10 6.5 3-12-9-7.5 11.5-.5z"/>'],
+correame:['Correame','<path d="M4 20h40v8H4z"/><path d="M18 15h12v18H18z"/><path d="M24 20v8"/>'],
+espada:['Espada','<path d="M24 4v28"/><path d="M21 7l3-3 3 3"/><path d="M16 32h16"/><path d="M24 32v8"/><circle cx="24" cy="42" r="2"/>'],
+generico:['Outros','<path d="M8 16l16-8 16 8v18l-16 8-16-8z"/><path d="M8 16l16 8 16-8M24 24v18"/>']
+};
+const icCat=c=>{if(c&&c.icone&&CAT_IC[c.icone])return c.icone;const n=norm(c&&c.nome);
+return /unifor|fard|tunic|farda/.test(n)?'uniforme':/cobert|barret|quepe|bone/.test(n)?'cobertura':/luva/.test(n)?'luvas':/cal[cç]|sapat|bota|coturn/.test(n)?'calcados':
+/insig|distint|plat/.test(n)?'insignias':/espad/.test(n)?'espada':/corre|acess|cinto/.test(n)?'correame':'generico';};
+const svgCat=k=>`<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(CAT_IC[k]||CAT_IC.generico)[1]}</svg>`;
+
 /* ============ Telas de entrada ============ */
 const cab=sub=>`<div class="brand">${SEAL}<div><h1>${NOME}</h1><p class="nome-ext">${SUB}</p><p>${sub}</p></div></div>`;
 function vNaoConfig(){return `<main class="login"><div class="login-card stack">${cab('Falta ligar o app ao Firebase')}<p>Preencha o arquivo <b>config.js</b> com os dados do projeto Firebase.</p></div></main>`;}
@@ -158,12 +179,12 @@ return `<div class="grid2">${grad}<label class="f"><span>Nome de guerra</span><i
 // Dados complementares: preenchidos pelo próprio militar dentro do sistema ("Meus dados")
 function camposComp(u){
 u=u||{};
-return `<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" required inputmode="numeric"></label>
+return `<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" inputmode="numeric"></label>
 <label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" value="${esc(u.telefone||'')}" inputmode="tel" placeholder="(41) 9…"></label></div>
 ${u.tipo==='oficial'
-?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" required placeholder="Ex.: 12º BPM"></label>`
-:`<div class="grid2"><label class="f"><span>Ano do curso</span><select class="i" name="ano" required>${ANOS.map(([v,n])=>`<option value="${v}" ${String(u.ano||'1')===v?'selected':''}>${n}</option>`).join('')}</select></label>
-<label class="f"><span>Pelotão</span><input class="i" name="pelotao" value="${esc(u.pelotao||'')}" required placeholder="Ex.: 1º Pelotão Alfa"></label></div>
+?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" placeholder="Ex.: 12º BPM"></label>`
+:`<div class="grid2"><label class="f"><span>Ano do curso</span><select class="i" name="ano">${ANOS.map(([v,n])=>`<option value="${v}" ${String(u.ano||'1')===v?'selected':''}>${n}</option>`).join('')}</select></label>
+<label class="f"><span>Pelotão</span><input class="i" name="pelotao" value="${esc(u.pelotao||'')}" placeholder="Ex.: 1º Pelotão Alfa"></label></div>
 <label class="f"><span>Turma</span><input class="i" name="turma" value="${esc(u.turma||'')}" placeholder="Ex.: 1º CFO PM 2026"></label>`}`;
 }
 function camposRom(u){
@@ -185,14 +206,14 @@ return o;
 const dadosCompletos=u=>!!(u&&u.rg&&(u.tipo==='oficial'?u.opm:u.pelotao)&&u.romaneio&&Object.keys(u.romaneio).length);
 
 /* ----- Telas ----- */
-const campoEmailSenha=()=>`<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>
+const campoEmailSenha=almox=>`${almox?`<label class="f"><span>Usuário para entrar no sistema (ou e-mail institucional)</span><input class="i" name="email" type="text" required autocapitalize="off" placeholder="Ex.: almox"></label><p class="small muted" style="margin-top:-.4rem">Como a conta da Furrielação no SICAM: com um usuário (sem @) não é preciso confirmar e-mail, e o seu e-mail institucional fica livre para a sua conta de cadete.</p>`:`<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>`}
 <div class="grid2"><label class="f"><span>Crie uma senha (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
 <label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>`;
 function vSetup(){
 return `<main class="login restrito"><div class="login-card">${cab('Configuração inicial')}
 <form id="f-setup" class="stack" autocomplete="off" data-tipo="cadete" data-perfil="almox">
 <p class="aviso">Esta tela só aparece uma vez. A conta criada aqui será a do <b>responsável pelo almoxarifado</b>, que depois libera os cadastros dos cadetes, dos oficiais e de outros auxiliares do almoxarifado.</p>
-${camposIdent({},'cadete')}${campoEmailSenha()}
+${camposIdent({},'cadete')}${campoEmailSenha(true)}
 <label class="check"><input type="checkbox" name="seed" checked><span>Carregar o catálogo inicial do almoxarifado (fardamento, coberturas, luvas, calçados, insígnias e acessórios), com estoque zerado</span></label>
 <p class="erro" id="setup-erro"></p>
 <button class="btn btn-pri btn-block">Criar conta do almoxarifado</button>
@@ -203,7 +224,7 @@ const r=ui.tela==='almox';
 return `<main class="login${r?' restrito':''}"><div class="login-card">${cab(r?'Painel do almoxarifado':'Almoxarifado · EsFO · APMG')}
 ${r?'<p style="margin:-.4rem 0 1rem"><span class="stamp c-stamp">Acesso restrito</span></p>':''}
 <form id="f-login" class="stack" autocomplete="on">
-<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" autocomplete="username" inputmode="email" placeholder="nome@${esc(DOMINIOS[0])}"></label>
+<label class="f"><span>${r?'Usuário ou e-mail':'E-mail institucional'}</span><input class="i" name="email" type="${r?'text':'email'}" required autocapitalize="off" autocomplete="username" inputmode="email" placeholder="${r?'almox':'nome@'+esc(DOMINIOS[0])}"></label>
 <label class="f"><span>Senha</span><input class="i" name="senha" type="password" required autocomplete="current-password"></label>
 <p class="erro" id="login-erro">${esc(loginMsg)}</p>
 <button class="btn btn-pri btn-block">${r?'Entrar no painel':'Entrar'}</button>
@@ -217,10 +238,10 @@ ${r?'':`<div style="text-align:center">${seletorTema()}</div>`}<p class="versao-
 function vCadastro(){
 const almox=ui.cadPerfil==='almox';const t=almox?'cadete':ui.cadTipo;
 return `<main class="login${almox?' restrito':''}"><div class="login-card">${cab(almox?'Solicitar conta do almoxarifado':'Criar minha conta')}
-${almox?'<p class="aviso" style="margin-bottom:1rem">A conta do almoxarifado só funciona depois de confirmar o e-mail e de ser aprovada pelo responsável pelo almoxarifado.</p>'
+${almox?'<p class="aviso" style="margin-bottom:1rem">A conta do almoxarifado só funciona depois de aprovada pelo responsável pelo almoxarifado.</p>'
 :`<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>`}
 <form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}" data-perfil="${almox?'almox':'cadete'}">
-${camposIdent({},t)}${campoEmailSenha()}
+${camposIdent({},t)}${campoEmailSenha(almox)}
 <p class="small muted">A senha também serve para <b>assinar</b> as cautelas.${almox?'':' Depois de entrar, você completa seus dados e o romaneio em "Meus dados".'}</p>
 <label class="check"><input type="checkbox" name="lgpd" required><span>Autorizo o uso dos meus dados pessoais exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>
 <p class="small muted">Você vai receber um link no e-mail institucional para confirmar a conta. Depois, o almoxarifado libera seu acesso.</p>
@@ -247,15 +268,16 @@ return `<main class="login"><div class="login-card stack">${cab('Cadastro recebi
 }
 
 async function fazerLogin(fd){
-const email=String(fd.get('email')||'').trim().toLowerCase();
+const email=emailDe(fd.get('email'));
 loginMsg='';ui.telaLogin=ui.tela;
 try{await signInWithEmailAndPassword(auth,email,String(fd.get('senha')||''));}
 catch(e){ui.telaLogin=null;$('#login-erro').textContent=erroFirebase(e);}
 }
 async function fazerCadastro(form,fd,setup){
 const errEl=$(setup?'#setup-erro':'#cad-erro');const err=m=>{errEl.textContent=m;};
-const email=String(fd.get('email')||'').trim().toLowerCase();
-if(!dominioOk(email))return err(`Use seu e-mail institucional (@${DOMINIOS[0]}).`);
+const perfilF=form.dataset.perfil||'cadete';
+const email=perfilF==='almox'?emailDe(fd.get('email')):String(fd.get('email')||'').trim().toLowerCase();
+if(!dominioOk(email)&&!(perfilF==='almox'&&ehFicticio(email)))return err(perfilF==='almox'?`Use um usuário sem @ (ex.: almox) ou o e-mail institucional (@${DOMINIOS[0]}).`:`Use seu e-mail institucional (@${DOMINIOS[0]}).`);
 if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
 const tipo=form.dataset.tipo||'cadete',perfil=form.dataset.perfil||'cadete';
 const dados=lerDados(fd,tipo);
@@ -273,7 +295,7 @@ await b.commit();
 }else{
 await setDoc(doc(db,'users',cred.user.uid),{...base,ativo:false,pendente:true});
 }
-try{await sendEmailVerification(cred.user);}catch(e){console.warn(e);}
+if(!ehFicticio(email)){try{await sendEmailVerification(cred.user);}catch(e){console.warn(e);}}
 bootstrapping=false;await aoMudarLogin(auth.currentUser);
 }catch(e){
 bootstrapping=false;console.error(e);
@@ -287,9 +309,9 @@ function vApp(){
 const u=me();const v=ui.view||'ini';
 const n=acoesPendentes();
 let corpo=v==='sol'?vSolicitar():v==='caut'?vMinhas():v==='pf'?vPerfil():vInicio();
-const nav=[['ini','Início',IC.ini,n],['sol','Solicitar',IC.sol,0],['caut','Cautelas',IC.rs,0],['pf','Meus dados',IC.pf,dadosCompletos(u)?0:1]];
+const nav=[['ini','Início',IC.ini,n],['sol','Solicitar',IC.sol,0],['caut','Cautelas',IC.rs,0],['pf','Meus dados',IC.pf,0]];
 return `<header class="m-top"><div class="wrap m-top-in"><img class="m-brasao" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>${esc(nomeU(u))}${turmaU(u)?' · '+esc(turmaU(u)):''}</p></div></div></header>
-<main class="m-main">${u.perfil==='almox'?'<div class="aviso" style="margin-bottom:.8rem">Você está usando o app como cadete. <button class="link" data-act="modo" data-m="almox">Voltar ao painel do almoxarifado</button></div>':''}${corpo}</main>
+<main class="m-main">${corpo}</main>
 ${v==='sol'&&ui.cart.length?`<div class="cartbar"><div class="in"><span><b>${ui.cart.reduce((a,x)=>a+x.qtd,0)}</b> peça(s) no pedido</span><button class="btn" data-act="abrirPedido">Revisar e enviar</button></div></div>`:''}
 <nav class="bnav"><div class="in">${nav.map(([k,l,ic,b])=>`<button data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}>${ic}<span>${l}${b?`<span class="dot-n">${b}</span>`:''}</span></button>`).join('')}</div></nav>`;
 }
@@ -331,21 +353,24 @@ if(ativas.length)h+=`<div class="sec-h"><h2>Cautelas ativas</h2></div>`+ativas.m
 if(!dadosCompletos(u))h=boxCompletar()+h;
 return h;
 }
-const boxCompletar=()=>`<div class="pend-box"><p><b>Complete seus dados e o romaneio</b></p><p class="small">Antes do primeiro pedido, informe RG, ${me().tipo==='oficial'?'OPM':'ano e pelotão'} e suas medidas. O sistema usa o romaneio para separar o tamanho certo de cada peça.</p><button class="btn btn-pri" style="margin-top:.5rem" data-act="go" data-v="pf">Preencher meus dados</button></div>`;
+const boxCompletar=()=>`<div class="aviso" style="margin-bottom:.8rem">Atualize seus dados e o <b>romaneio</b> quando puder: com as suas medidas o sistema já sugere o tamanho certo de cada peça. <button class="link" data-act="go" data-v="pf">Atualizar agora</button></div>`;
 function vSolicitar(){
 const u=me();
-if(!dadosCompletos(u))return boxCompletar();
 const cats=D.cats.filter(c=>D.itens.some(i=>i.catId===c.id&&i.ativo!==false));
-if(!ui.cat||!cats.some(c=>c.id===ui.cat))ui.cat=cats[0]?cats[0].id:null;
-let h=`<div class="filterbar"><div class="chips">${cats.map(c=>`<button class="chip" data-act="cat" data-id="${c.id}" aria-pressed="${ui.cat===c.id}">${esc(c.nome)}</button>`).join('')}</div></div>`;
+if(ui.cat&&!cats.some(c=>c.id===ui.cat))ui.cat=null;
+if(!ui.cat){
+if(!cats.length)return `<div class="empty">Nenhum material cadastrado ainda.</div>`;
+return `<div class="sec-h"><h2>O que você precisa?</h2></div><div class="cat-grid2">${cats.map(c=>{const n=D.itens.filter(i=>i.catId===c.id&&i.ativo!==false).length;
+return `<button class="cat-tile" data-act="catSol" data-id="${c.id}"><span class="cat-ic">${svgCat(icCat(c))}</span><h3>${esc(c.nome)}</h3><span class="n">${n} ${n===1?'item':'itens'}</span></button>`;}).join('')}</div>`;}
+const c=cats.find(x=>x.id===ui.cat);
+let h=`<button class="voltar" data-act="catSol" data-id="">← Categorias</button><div class="cat-topo"><span class="cat-ic">${svgCat(icCat(c))}</span><h2>${esc(c.nome)}</h2></div>`;
 const its=D.itens.filter(i=>i.catId===ui.cat&&i.ativo!==false);
-if(!its.length)return h+`<div class="empty">Nenhum material cadastrado ainda.</div>`;
 h+=its.map(it=>{
 const sug=sugTam(it,u);const sel=(ui.tamSel||{})[it.id]||sug||(it.tamanhos||[])[0];
 const unico=(it.tamanhos||[]).length<=1;
 const noCart=ui.cart.filter(x=>x.itemId===it.id).reduce((a,x)=>a+x.qtd,0);
 return `<div class="card" style="margin-bottom:.6rem"><div class="eq"><div><h3>${esc(it.nome)}</h3>
-<p class="avail">${it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'} · ${esc((UNID[it.unidade]||UNID.un)[0])}${it.campo&&!sug?` · <span class="c-brass">preencha "${esc(ROMN[it.campo]||it.campo)}" no romaneio</span>`:''}</p></div>
+<p class="avail">${it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'} · ${esc((UNID[it.unidade]||UNID.un)[0])}${it.campo&&!sug?` · <button class="link" data-act="go" data-v="pf">informe seu tamanho no romaneio</button>`:''}</p></div>
 <button class="btn btn-pri btn-sm" data-act="addCart" data-id="${it.id}">Adicionar</button></div>
 ${unico?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=est(it,t).disp;return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" ${d>0?'':'disabled title="Sem estoque"'}>${esc(t)}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).</p>`:''}`}
 ${unico&&est(it,(it.tamanhos||[])[0]).disp<=0?'<p class="falta">Sem estoque no momento.</p>':''}
@@ -395,7 +420,7 @@ return `<div class="sec-h"><h2>Minhas cautelas</h2><span class="muted small">${l
 function vPerfil(){
 const u=me();const bio=temBioAqui();
 return `<div class="sec-h"><h2>Meus dados</h2></div>
-${dadosCompletos(u)?'':`<div class="pend-box"><p class="small">Preencha os campos abaixo e o romaneio para poder solicitar material.</p></div>`}
+<p class="small muted" style="margin-bottom:.6rem">Preencha ou atualize quando quiser. Nada aqui é obrigatório para fazer pedidos, mas o romaneio ajuda o almoxarifado a separar o tamanho certo.</p>
 <div class="card stack"><dl class="dados-mil"><dt>Militar</dt><dd>${esc(nomeU(u))}</dd><dt>Nome</dt><dd>${esc(u.nome)}</dd><dt>E-mail</dt><dd>${esc(u.email)}</dd></dl>
 <p class="small muted">Para corrigir nome, graduação ou e-mail, procure o almoxarifado.</p></div>
 <form id="f-perfil" class="stack" style="margin-top:.8rem">
@@ -406,14 +431,13 @@ ${dadosCompletos(u)?'':`<div class="pend-box"><p class="small">Preencha os campo
 ${bio?'<p class="pill ok">Digital / Face ID ativados neste aparelho</p>':bioOk?`<p class="small">Ative para assinar as cautelas com digital, Face ID ou a senha do celular.</p><button class="btn btn-pri" data-act="ativarBio">Ativar digital / Face ID neste aparelho</button>`:'<p class="small muted">Este aparelho não oferece digital/Face ID para sites. Assine com a senha.</p>'}
 <button class="btn" data-act="senha">Trocar minha senha</button></div>
 <div class="card stack" style="margin-top:.8rem"><h3>Aparência</h3>${seletorTema()}</div>
-${u.perfil==='almox'?'<button class="btn btn-pri btn-block" style="margin-top:1rem" data-act="modo" data-m="almox">Voltar ao painel do almoxarifado</button>':''}
 <button class="btn btn-warn btn-block" style="margin-top:1rem" data-act="sair">Sair</button><p class="versao-app">${NOME} v${VERSAO}</p>`;
 }
 async function salvarPerfil(fd){
 const u=me();const d=lerDados(fd,u.tipo);
 const up={rg:d.rg||'',telefone:d.telefone||'',romaneio:d.romaneio||{},atualizadoEm:nowISO()};
 if(u.tipo==='oficial')up.opm=d.opm||'';else{up.pelotao=d.pelotao||'';up.ano=d.ano||'';up.turma=d.turma||'';}
-try{await updateDoc(doc(db,'users',u.id),up);toast(dadosCompletos({...u,...up})?'Dados salvos.':'Dados salvos. Faltam informações para liberar os pedidos.');window.scrollTo(0,0);}
+try{await updateDoc(doc(db,'users',u.id),up);toast('Dados salvos.');window.scrollTo(0,0);}
 catch(e){$('#pf-erro').textContent=erroFirebase(e);}
 }
 function trocarSenha(){
@@ -598,7 +622,6 @@ const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
 ${nav.map(([k,l,b])=>`<button class="nav-b" data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}><span>${l}</span>${b?`<span class="badge${k==='uso'?' red':''}">${b}</span>`:''}</button>`).join('')}
 <button class="nav-b" data-act="balcao"><span>+ Cautela no balcão</span></button>
-<button class="nav-b" data-act="modo" data-m="cadete"><span>Usar como cadete</span></button>
 <div class="foot"><div class="who">${esc(nomeU(u))}</div>${seletorTema()}<button class="nav-b" data-act="senha">Trocar senha</button><button class="nav-b" data-act="sair">Sair</button></div></aside>
 <main class="a-main">${corpo}</main></div>`;
 }
@@ -741,7 +764,7 @@ openModal('Cautela no balcão',`<form id="f-bal" class="stack" autocomplete="off
 <label class="f"><span>Militar</span><select class="i" name="mil" data-chg="balMil"><option value="">Escolha…</option>${mil.map(x=>`<option value="${x.id}" ${x.id===b.userId?'selected':''}>${esc(nomeU(x))} – ${esc(turmaU(x))}</option>`).join('')}</select></label>
 ${u&&u.romaneio&&Object.keys(u.romaneio).length?`<p class="small">Romaneio: ${Object.entries(u.romaneio).map(([k,v])=>esc((ROMN[k]||k).split(' ')[0])+' '+esc(v)).join(' · ')}</p>`:''}
 <div class="dupla stack"><div class="grid2"><label class="f"><span>Item</span><select class="i" name="it" data-chg="balIt"><option value="">Escolha…</option>${its.map(i=>`<option value="${i.id}" ${i.id===b.it?'selected':''}>${esc(cat(i.catId).nome)} – ${esc(i.nome)}</option>`).join('')}</select></label>
-<label class="f"><span>Tamanho</span><select class="i" name="tam">${b.it?opcoesTam(item(b.it),sugTam(item(b.it),u)||(item(b.it).tamanhos||[])[0]):''}</select></label></div>
+<label class="f"><span>Tamanho</span><select class="i" name="tam">${b.it?opcoesTam(item(b.it),sugTam(item(b.it),u)||(item(b.it).tamanhos||[]).find(t=>est(item(b.it),t).disp>0)||(item(b.it).tamanhos||[])[0]):''}</select></label></div>
 <div class="row"><label class="f" style="flex:1"><span>Quantidade</span><input class="i" type="number" name="qtd" min="1" max="20" value="1"></label><button type="button" class="btn" data-act="balAdd" style="margin-top:1.2rem">Adicionar</button></div></div>
 <ul class="bal-lista">${b.linhas.map((l,i)=>`<li><span class="nm">${l.qtd}× ${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}</span><button type="button" class="mini rm" data-act="balRm" data-i="${i}">×</button></li>`).join('')||'<li class="muted small">Nenhuma peça adicionada.</li>'}</ul>
 <div class="grid2"><label class="f"><span>Prazo de devolução (opcional)</span><input class="i" type="date" name="prazo" value="${esc(b.prazo||'')}" data-chg="balPrazo"></label>
@@ -820,42 +843,59 @@ await updateDoc(doc(db,'cautelas',c.id),{prazo:p,atualizadoEm:nowISO(),log:[...(
 }
 
 /* ============ Material: categorias, itens, tamanhos e estoque ============ */
+function resumoCat(c){
+const its=D.itens.filter(i=>i.catId===c.id);let tot=0,dis=0,uso=0,esg=0;
+its.forEach(it=>(it.tamanhos||[]).forEach(t=>{const e=est(it,t);tot+=e.total;dis+=e.disp;uso+=cauteladoDe(it.id,t);if(e.total>0&&e.disp<=0)esg++;}));
+return {n:its.length,tot,dis,uso,esg};
+}
 function vMaterial(){
 const q=norm(ui.matQ);
-let h=`<div class="a-head"><div><h1>Material</h1><p>Disponível = na prateleira · Em uso = cautelado · Total = patrimônio do almoxarifado</p></div>
+if(ui.matCat&&!D.cats.some(c=>c.id===ui.matCat))ui.matCat=null;
+if(ui.matCat&&!q)return vMaterialCat(D.cats.find(c=>c.id===ui.matCat));
+let h=`<div class="a-head"><div><h1>Material</h1><p>Escolha uma categoria para ver os itens, os tamanhos e o estoque.</p></div>
 <div class="row"><button class="btn" data-act="novaCat">+ Categoria</button><button class="btn btn-pri" data-act="novoItem">+ Item</button></div></div>
-<div class="filters"><input class="i" data-inp="matQ" placeholder="Buscar item" value="${esc(ui.matQ)}"></div>`;
+<div class="filters"><input class="i" data-inp="matQ" placeholder="Buscar item em todas as categorias" value="${esc(ui.matQ)}"></div>`;
+if(q){const its=D.itens.filter(i=>norm(i.nome).includes(q));
+return h+(its.length?`<div class="it-lista">${its.map(rowItem).join('')}</div>`:'<div class="empty">Nenhum item encontrado.</div>');}
 if(!D.cats.length)return h+`<div class="empty">Nenhuma categoria. Crie a primeira em "+ Categoria".</div>`;
-D.cats.forEach(c=>{
-const its=D.itens.filter(i=>i.catId===c.id&&(!q||norm(i.nome).includes(q)));
-if(q&&!its.length)return;
-h+=`<div class="cat-h"><span>${esc(c.nome)}</span><button class="btn btn-sm" data-act="editCat" data-id="${c.id}">Editar categoria</button></div>`;
-h+=its.length?its.map(it=>{
-const tams=it.tamanhos||[];
-const tot=tams.reduce((a,t)=>a+est(it,t).total,0),dis=tams.reduce((a,t)=>a+est(it,t).disp,0);
-return `<div class="card" style="margin-bottom:.6rem"><div class="item-card"><div><h3>${esc(it.nome)}${it.ativo===false?' <span class="tag">inativo</span>':''}${it.consumo?' <span class="tag">entrega definitiva</span>':''}</h3>
-<p class="avail">${esc((UNID[it.unidade]||UNID.un)[1])} · disponível <b>${dis}</b> de ${tot}${it.campo?' · tamanho pelo romaneio: '+esc(ROMN[it.campo]||it.campo):''}</p></div>
-<div class="acts"><button class="btn btn-sm" data-act="entrada" data-id="${it.id}">Entrada</button><button class="btn btn-sm" data-act="ajuste" data-id="${it.id}">Baixa / inventário</button><button class="btn btn-sm" data-act="quem" data-id="${it.id}">Com quem está</button><button class="btn btn-sm" data-act="editItem" data-id="${it.id}">Editar</button></div></div>
-<div class="estq">${tams.map(t=>{const e=est(it,t),u=cauteladoDe(it.id,t),s=separadoDe(it.id,t);return `<div class="${e.disp<=0?'zero':''}"><span>${esc(t)}</span><b>${e.disp}</b><span class="muted">${u} em uso${s?` · ${s} sep.`:''} · total ${e.total}</span></div>`;}).join('')}</div></div>`;}).join('')
-:'<div class="empty" style="margin-bottom:.6rem">Nenhum item nesta categoria.</div>';
-});
+h+=`<div class="cat-grid2">${D.cats.map(c=>{const r=resumoCat(c);return `<button class="cat-tile" data-act="matCat" data-id="${c.id}">
+<span class="cat-ic">${svgCat(icCat(c))}</span><h3>${esc(c.nome)}</h3>
+<span class="n">${r.n} ${r.n===1?'item':'itens'} · <b>${r.dis}</b> na prateleira${r.uso?` · ${r.uso} em uso`:''}${r.esg?`<br><span class="alerta">${r.esg} tamanho(s) esgotado(s)</span>`:''}</span></button>`;}).join('')}</div>`;
 const sem=D.itens.filter(i=>!D.cats.some(c=>c.id===i.catId));
-if(sem.length)h+=`<div class="cat-h">Sem categoria</div>`+sem.map(i=>`<div class="card"><b>${esc(i.nome)}</b> <button class="btn btn-sm" data-act="editItem" data-id="${i.id}">Editar</button></div>`).join('');
+if(sem.length)h+=`<div class="sec-h"><h2>Sem categoria</h2></div><div class="it-lista">${sem.map(rowItem).join('')}</div>`;
 return h;
 }
+function rowItem(it){
+const tams=it.tamanhos||[];
+const tot=tams.reduce((a,t)=>a+est(it,t).total,0),dis=tams.reduce((a,t)=>a+est(it,t).disp,0),uso=tams.reduce((a,t)=>a+cauteladoDe(it.id,t),0);
+const unico=tams.length<=1;
+return `<div class="it-row"><div><h3>${esc(it.nome)}${it.ativo===false?' <span class="tag">fora do app</span>':''}${it.consumo?' <span class="tag">entrega definitiva</span>':''}</h3>
+<p class="resumo"><b>${dis}</b> na prateleira · ${uso} em uso · total ${tot} ${esc((UNID[it.unidade]||UNID.un)[tot===1?0:1])}${it.campo?` · tamanho pelo romaneio (${esc((ROMN[it.campo]||it.campo).split(' (')[0])})`:''}</p></div>
+<div class="acts"><button class="btn btn-sm btn-pri" data-act="entrada" data-id="${it.id}">Entrada</button><button class="btn btn-sm" data-act="ajuste" data-id="${it.id}">Baixa / inventário</button><button class="btn btn-sm" data-act="quem" data-id="${it.id}">Com quem está</button><button class="btn btn-sm" data-act="editItem" data-id="${it.id}">Editar</button></div>
+${unico?'':`<div class="tams">${tams.map(t=>{const e=est(it,t),u=cauteladoDe(it.id,t);return `<span class="tam-chip${e.total>0&&e.disp<=0?' zero':''}" title="${e.disp} na prateleira, ${u} em uso, total ${e.total}">${esc(t)} <b>${e.disp}</b>${u?`<span class="u">+${u} em uso</span>`:''}</span>`;}).join('')}</div>`}</div>`;
+}
+function vMaterialCat(c){
+const its=D.itens.filter(i=>i.catId===c.id);const r=resumoCat(c);
+return `<button class="voltar" data-act="matCat" data-id="">← Todas as categorias</button>
+<div class="cat-topo"><span class="cat-ic">${svgCat(icCat(c))}</span><div style="flex:1;min-width:10rem"><h1>${esc(c.nome)}</h1><p class="muted">${r.n} ${r.n===1?'item':'itens'} · ${r.dis} na prateleira · ${r.uso} em uso · total ${r.tot}</p></div>
+<div class="row"><button class="btn" data-act="editCat" data-id="${c.id}">Editar categoria</button><button class="btn btn-pri" data-act="novoItem" data-cat="${c.id}">+ Item nesta categoria</button></div></div>
+<p class="small muted" style="margin-bottom:.6rem">Os números grandes mostram quantas peças de cada tamanho estão na prateleira.</p>
+${its.length?`<div class="it-lista">${its.map(rowItem).join('')}</div>`:'<div class="empty">Nenhum item nesta categoria.</div>'}`;
+}
 function formCat(c){
-c=c||{};
+c=c||{};const atual=c.id?icCat(c):'generico';
 openModal(c.id?'Editar categoria':'Nova categoria',`<form id="f-cat" data-id="${c.id||''}" class="stack">
 <label class="f"><span>Nome</span><input class="i" name="nome" required value="${esc(c.nome||'')}"></label>
+<div><span class="sep-lbl">Imagem da categoria</span><div class="ic-esc">${Object.entries(CAT_IC).map(([k,v])=>`<label><input type="radio" name="icone" value="${k}" ${k===atual?'checked':''}>${svgCat(k)}<span>${v[0]}</span></label>`).join('')}</div></div>
 <label class="f"><span>Ordem na lista</span><input class="i" type="number" name="ordem" value="${c.ordem!=null?c.ordem:(D.cats.length+1)*10}"></label>
 <button class="btn btn-pri btn-block">Salvar</button></form>`);
 }
 async function salvarCat(form,fd){
 const id=form.dataset.id||uidNovo();
-await setDoc(doc(db,'categorias',id),{nome:String(fd.get('nome')).trim(),ordem:int(fd.get('ordem'))},{merge:true});closeModal();toast('Categoria salva.');
+await setDoc(doc(db,'categorias',id),{nome:String(fd.get('nome')).trim(),ordem:int(fd.get('ordem')),icone:String(fd.get('icone')||'generico')},{merge:true});closeModal();toast('Categoria salva.');
 }
-function formItem(it){
-it=it||{};
+function formItem(it,catPadrao){
+it=it||{catId:catPadrao};
 openModal(it.id?'Editar item':'Novo item',`<form id="f-item" data-id="${it.id||''}" class="stack">
 <label class="f"><span>Categoria</span><select class="i" name="catId" required>${D.cats.map(c=>`<option value="${c.id}" ${c.id===it.catId?'selected':''}>${esc(c.nome)}</option>`).join('')}</select></label>
 <label class="f"><span>Nome do item</span><input class="i" name="nome" required value="${esc(it.nome||'')}" placeholder="Ex.: Luva branca"></label>
@@ -931,14 +971,14 @@ const q=norm(ui.mq);const pc=pendCad();
 let l=D.users.filter(u=>!u.pendente&&(!q||norm(nomeU(u)+' '+u.nome+' '+turmaU(u)+' '+u.email+' '+(u.rg||'')).includes(q)));
 l.sort((a,b)=>(b.ativo-a.ativo)||nomeU(a).localeCompare(nomeU(b),'pt-BR'));
 const emUso=id=>ativasA().filter(c=>c.userId===id).reduce((a,c)=>a+(c.itens||[]).reduce((b,x)=>b+pend(x),0),0);
-let h=`<div class="a-head"><div><h1>Militares</h1><p>${D.users.filter(u=>u.ativo).length} com acesso liberado</p></div><button class="btn" data-act="csvMil">Exportar romaneios (CSV)</button></div>`;
+let h=`<div class="a-head"><div><h1>Militares</h1><p>${D.users.filter(u=>u.ativo).length} com acesso liberado</p></div><div class="row"><button class="btn" data-act="csvMil">Exportar romaneios (CSV)</button><button class="btn btn-pri" data-act="novoMil">+ Cadastrar oficial de fora da EsFO</button></div></div>`;
 if(pc.length)h+=`<div class="sec-h"><h2>Aguardando liberação</h2></div>`+pc.map(u=>`<div class="card" style="margin-bottom:.6rem"><div class="card-t"><div><p style="font-weight:600">${esc(nomeU(u))} <span class="tag">${u.perfil==='almox'?'Conta do almoxarifado':u.tipo==='oficial'?'Oficial':'Cadete'}</span></p>
 <p class="small muted">${esc(u.nome)} · ${esc(u.email)}</p><p class="small muted">Cadastro em ${fmt(u.criadoEm)}</p></div>
 <div class="row"><button class="btn btn-sm btn-warn" data-act="negarCad" data-id="${u.id}">Recusar</button><button class="btn btn-sm btn-pri" data-act="liberar" data-id="${u.id}">Liberar</button></div></div></div>`).join('');
 h+=`<div class="filters" style="margin-top:1rem"><input class="i" data-inp="mq" placeholder="Buscar por nome, pelotão, RG ou e-mail" value="${esc(ui.mq)}"></div>
 <div class="tbl-wrap"><table><thead><tr><th>Militar</th><th>Turma / OPM</th><th>Peças em uso</th><th>Situação</th></tr></thead><tbody>
 ${l.map(u=>`<tr class="hov" data-act="verMil" data-id="${u.id}"><td>${esc(nomeU(u))}<br><span class="small muted">${esc(u.nome)}</span></td><td>${esc(turmaU(u))||'<span class="muted">dados incompletos</span>'}</td><td>${emUso(u.id)||'—'}</td>
-<td>${u.perfil==='almox'?'<span class="tag">Almoxarifado</span> ':''}${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Sem acesso</span>'}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Ninguém encontrado.</td></tr>'}
+<td>${u.perfil==='almox'?'<span class="tag">Almoxarifado</span> ':''}${u.externo?'<span class="tag">Oficial externo</span> ':''}${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Sem acesso</span>'}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Ninguém encontrado.</td></tr>'}
 </tbody></table></div>`;
 return h;
 }
@@ -962,6 +1002,32 @@ openModal('Editar – '+esc(nomeU(u)),`<form id="f-editmil" data-id="${id}" clas
 async function salvarMil(form,fd){
 const u=user(form.dataset.id);const d=lerDados(fd,u.tipo);
 try{await updateDoc(doc(db,'users',u.id),{...d,atualizadoEm:nowISO()});closeModal();toast('Dados salvos.');}catch(e){$('#em-erro').textContent=erroFirebase(e);}
+}
+/* Cadastro feito pelo almoxarife (oficial de fora da EsFO ou exceções), como o "Cadastrar manualmente" do SICAM.
+   O próprio oficial digita a senha: é com ela que ele assina a cautela no balcão. */
+function formNovoMil(){
+openModal('Cadastrar oficial de fora da EsFO',`<form id="f-novomil" class="stack" autocomplete="off">
+<p class="aviso">Faça o cadastro com o oficial presente. Ele mesmo digita a senha no fim: é com ela que vai assinar as cautelas no balcão.</p>
+${camposIdent({},'oficial')}
+<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" required inputmode="numeric"></label><label class="f"><span>OPM / unidade</span><input class="i" name="opm" required placeholder="Ex.: 12º BPM"></label></div>
+<label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" inputmode="tel"></label>
+<label class="f"><span>E-mail (de preferência o institucional)</span><input class="i" name="email" type="email" required autocapitalize="off"></label>
+<details><summary class="small">Romaneio (opcional)</summary>${camposRom({})}</details>
+<div class="grid2"><label class="f"><span>Senha do oficial (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
+<label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>
+<p class="erro" id="nm-erro"></p><button class="btn btn-pri btn-block">Cadastrar oficial</button></form>`);
+}
+async function salvarNovoMil(form,fd){
+const err=m=>{$('#nm-erro').textContent=m;};
+const email=String(fd.get('email')||'').trim().toLowerCase();
+if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))return err('E-mail inválido.');
+if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
+const d=lerDados(fd,'oficial');
+let uid;
+try{uid=await comAuthSecundario(async a2=>{const c=await createUserWithEmailAndPassword(a2,email,String(fd.get('senha')));try{if(dominioOk(email))await sendEmailVerification(c.user);}catch(e){}return c.user.uid;});}
+catch(e){return err(e.code==='auth/email-already-in-use'?'Já existe uma conta com esse e-mail. Procure o oficial na lista de militares.':erroFirebase(e));}
+await setDoc(doc(db,'users',uid),{...d,tipo:'oficial',externo:true,email,perfil:'cadete',ativo:true,pendente:false,criadoEm:nowISO(),criadoPor:sess.userId,lgpd:nowISO()});
+closeModal();toast(`${d.grad} ${d.guerra} cadastrado. Já pode receber cautela no balcão.`);
 }
 async function liberar(id){const u=user(id);if(u.perfil==='almox'&&!confirm(`${nomeU(u)} pediu conta do ALMOXARIFADO: vai poder separar, entregar, receber devoluções e mexer no estoque. Liberar?`))return;await updateDoc(doc(db,'users',id),{ativo:true,pendente:false,liberadoPor:sess.userId,liberadoEm:nowISO()});toast('Acesso liberado.');}
 async function negarCad(id){if(!confirm('Recusar este cadastro?'))return;await updateDoc(doc(db,'users',id),{ativo:false,pendente:false,recusadoPor:sess.userId,recusadoEm:nowISO()});toast('Cadastro recusado.');}
@@ -1066,7 +1132,7 @@ let semeando=false;
 async function semearCatalogo(){
 if(semeando||!D.setup||!D.setup.seed||D.setup.seeded)return;semeando=true;
 try{const b=writeBatch(db);
-CATALOGO.forEach(([cn,its],ci)=>{const cid='cat'+(ci+1);b.set(doc(db,'categorias',cid),{nome:cn,ordem:(ci+1)*10});
+CATALOGO.forEach(([cn,its],ci)=>{const cid='cat'+(ci+1);b.set(doc(db,'categorias',cid),{nome:cn,ordem:(ci+1)*10,icone:['uniforme','cobertura','luvas','calcados','insignias','correame'][ci]||'generico'});
 its.forEach(([n,un,campo,tams],ii)=>{const t=tams.split(',').map(s=>s.trim());const e={};t.forEach(x=>e[x]={total:0,disp:0});
 b.set(doc(collection(db,'itens')),{catId:cid,nome:n,unidade:un,campo,tamanhos:t,estoque:e,consumo:false,ativo:true,ordem:ii*10});});});
 b.update(doc(db,'config','setup'),{seeded:true});await b.commit();toast('Catálogo inicial carregado. Registre as entradas de estoque em "Material".');}
@@ -1075,7 +1141,6 @@ catch(e){console.error(e);semeando=false;}
 
 /* ============ Eventos ============ */
 const acts={
-modo:el=>{ui.modo=el.dataset.m;ui.view=null;try{localStorage.setItem('almox.modo',ui.modo);}catch(e){}closeModal();render();window.scrollTo(0,0);},
 go:el=>{ui.view=el.dataset.v;closeModal();render();window.scrollTo(0,0);},
 fechar:closeModal,
 recarregar:()=>location.reload(),
@@ -1085,7 +1150,7 @@ irCadastro:el=>{loginMsg='';ui.cadPerfil=el.dataset.p||'cadete';fase='cadastro';
 tela:el=>{ui.tela=el.dataset.t;loginMsg='';fase='login';render();},
 irLogin:()=>{fase='login';render();},
 cadTipo:el=>{ui.cadTipo=el.dataset.t;render();},
-esqueci:()=>openModal('Esqueci minha senha',`<form id="f-esq" class="stack"><label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off"></label>
+esqueci:()=>openModal('Esqueci minha senha',`<form id="f-esq" class="stack"><label class="f"><span>E-mail institucional</span><input class="i" name="email" type="text" required autocapitalize="off"></label>
 <p class="erro" id="esq-erro"></p><button class="btn btn-pri btn-block">Enviar link para nova senha</button></form>`),
 jaConfirmei:async()=>{const u=auth.currentUser;if(!u)return;await u.reload();if(auth.currentUser.emailVerified){await auth.currentUser.getIdToken(true);await aoMudarLogin(auth.currentUser);}else $('#ver-erro').textContent='Ainda não consta a confirmação. Clique no link do e-mail e tente de novo.';},
 reenviar:async()=>{try{await sendEmailVerification(auth.currentUser);toast('E-mail reenviado.');}catch(e){toast(e.code==='auth/too-many-requests'?'Aguarde alguns minutos antes de reenviar.':erroFirebase(e),true);}},
@@ -1126,13 +1191,16 @@ confirmarDev:el=>confirmarDev(el.dataset.id),
 prazo:el=>editarPrazo(el.dataset.id),
 novaCat:()=>formCat(null),
 editCat:el=>formCat(D.cats.find(c=>c.id===el.dataset.id)),
-novoItem:()=>{if(!D.cats.length){toast('Crie uma categoria primeiro.',true);return;}formItem(null);},
+novoItem:el=>{if(!D.cats.length){toast('Crie uma categoria primeiro.',true);return;}formItem(null,el.dataset.cat||ui.matCat||'');},
+matCat:el=>{ui.matCat=el.dataset.id||null;ui.matQ='';render();window.scrollTo(0,0);},
+catSol:el=>{ui.cat=el.dataset.id||null;render();window.scrollTo(0,0);},
 editItem:el=>formItem(item(el.dataset.id)),
 entrada:el=>formEntrada(el.dataset.id),
 ajuste:el=>{ui.ajModo='baixa';formAjuste(el.dataset.id);},
 ajModo:el=>{ui.ajModo=el.dataset.m;formAjuste($('#f-aj').dataset.id);},
 quem:el=>quemEsta(el.dataset.id),
 liberar:el=>liberar(el.dataset.id),
+novoMil:()=>formNovoMil(),
 negarCad:el=>negarCad(el.dataset.id),
 verMil:el=>verMil(el.dataset.id),
 editMil:el=>editMil(el.dataset.id),
@@ -1152,7 +1220,7 @@ const forms={
 'f-login':(f,fd)=>fazerLogin(fd),
 'f-cad':(f,fd)=>fazerCadastro(f,fd,false),
 'f-setup':(f,fd)=>fazerCadastro(f,fd,true),
-'f-esq':async(f,fd)=>{try{await sendPasswordResetEmail(auth,String(fd.get('email')).trim().toLowerCase());closeModal();toast('Se o e-mail estiver cadastrado, o link para nova senha foi enviado.');}catch(e){$('#esq-erro').textContent=erroFirebase(e);}},
+'f-esq':async(f,fd)=>{if(!String(fd.get('email')).includes('@')){$('#esq-erro').textContent='Contas por usuário não recebem e-mail: peça ao responsável pelo almoxarifado para criar uma nova.';return;}try{await sendPasswordResetEmail(auth,String(fd.get('email')).trim().toLowerCase());closeModal();toast('Se o e-mail estiver cadastrado, o link para nova senha foi enviado.');}catch(e){$('#esq-erro').textContent=erroFirebase(e);}},
 'f-senha':(f,fd)=>salvarSenha(fd),
 'f-perfil':(f,fd)=>salvarPerfil(fd),
 'f-ass':(f,fd)=>assinarComSenha(fd),
@@ -1165,6 +1233,7 @@ const forms={
 'f-ent':(f,fd)=>salvarEntrada(f,fd),
 'f-aj':(f,fd)=>salvarAjuste(f,fd),
 'f-editmil':(f,fd)=>salvarMil(f,fd),
+'f-novomil':(f,fd)=>salvarNovoMil(f,fd),
 'f-pedido':()=>enviarPedido(),
 'f-bal':()=>balAdd()
 };
@@ -1230,7 +1299,7 @@ else if(nome==='cats')D.cats=ordenarCats(arr);
 else if(nome==='itens'){D.itens=arr;ordenarItens(D.itens);}
 else if(nome==='trfIn'){if(!prim)snap.docChanges().forEach(ch=>{if(ch.type==='added'){const c=ch.doc.data();avisar('Transferência para você',`${nomeM(c.userId)} quer transferir material. Abra o Início para aceitar.`);}});D.trfIn=arr;}
 else{if(prim)snap.docs.forEach(d=>prevSt.set(d.id,d.data().status+'|'+(d.data().assinatura?1:0)));else avisosCautelas(snap,adm);
-baldes[nome]=arr;D.cautelas=juntarCautelas();if(adm)D.trfIn=D.cautelas.filter(c=>c.transferPara===uid&&c.status==='cautelada');if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
+baldes[nome]=arr;D.cautelas=juntarCautelas();if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
 depois(prim);
 },err=>{
 if(nome==='trfIn'||nome==='recentes'){console.warn(nome,err);baldes[nome]=[];pronto();return;}
@@ -1243,7 +1312,7 @@ if(bootstrapping)return;
 pararEscutas();closeModal();if(aguardandoUnsub){aguardandoUnsub();aguardandoUnsub=null;}
 try{
 if(!u){sess=null;D=D0();const f=(await setupFeito())?'login':'setup';fase=(fase==='cadastro'&&f==='login')?fase:f;render();return;}
-if(!u.emailVerified){fase='verificar';render();return;}
+if(!u.emailVerified&&!ehFicticio(u.email)){fase='verificar';render();return;}
 fase='carregando';render();
 const s=await getDoc(doc(db,'users',u.uid));
 if(!s.exists()){loginMsg='Não há cadastro seu no Almox EsFO. Toque em "Criar minha conta".';await signOut(auth);return;}
@@ -1272,7 +1341,7 @@ else if(fase==='cadastro')html=vCadastro();
 else if(fase==='verificar')html=vVerificar();
 else if(fase==='aguardando')html=vAguardando();
 else if(fase==='login'||!sess||!me())html=fase==='app'?vCarregando():vLogin();
-else html=ehAlmox()&&ui.modo!=='cadete'?vAdmin():vApp();
+else html=ehAlmox()?vAdmin():vApp();
 $('#app').innerHTML=html;
 document.title=sess&&fase==='app'?`${NOME}${ehAlmox()&&solicitadas().length?' ('+solicitadas().length+')':''}`:`${NOME} – Cautela de Materiais`;
 if(keep){const el=document.querySelector(`[data-inp="${keep}"]`);if(el){el.focus();try{el.setSelectionRange(pos,pos);}catch(e){}}}

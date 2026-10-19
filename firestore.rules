@@ -1,5 +1,5 @@
 rules_version = '2';
-// Regras de segurança do Almox EsFO (v1.1)
+// Regras de segurança do Almox EsFO (v1.3)
 // Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -10,17 +10,23 @@ service cloud.firestore {
       return logado() && request.auth.token.email is string
         && request.auth.token.email.lower().matches('.*@pm[.]pr[.]gov[.]br$');
     }
+    // Conta do almoxarifado por usuário (ex.: almox@almox.esfo), como a da Furrielação no SICAM: não recebe e-mail de confirmação
+    function emailInterno() {
+      return logado() && request.auth.token.email is string && request.auth.token.email.lower().matches('.*@almox[.]esfo$');
+    }
     function verificado() { return emailPM() && request.auth.token.email_verified == true; }
     function eu() { return get(/databases/$(database)/documents/users/$(uid())).data; }
     function cadastrado() { return exists(/databases/$(database)/documents/users/$(uid())); }
-    function ativo() { return verificado() && cadastrado() && eu().ativo == true; }
+    function ativo() {
+      return cadastrado() && eu().ativo == true && (verificado() || (emailInterno() && eu().perfil == 'almox'));
+    }
     function almox() { return ativo() && eu().perfil == 'almox'; }
     function muda(campos) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(campos); }
 
     // ---------- Configuração inicial (cria o primeiro almoxarife) ----------
     match /config/setup {
       allow read: if true;
-      allow create: if emailPM() && !exists(/databases/$(database)/documents/config/setup)
+      allow create: if (emailPM() || emailInterno()) && !exists(/databases/$(database)/documents/config/setup)
                     && existsAfter(/databases/$(database)/documents/users/$(uid()));
       allow update: if almox();
       allow delete: if false;
@@ -44,7 +50,9 @@ service cloud.firestore {
     match /users/{id} {
       allow read: if logado() && (id == uid() || almox());
       // Autocadastro: sempre pendente (cadete, oficial ou pedido de conta do almoxarifado); o primeiro almoxarife nasce junto com config/setup.
-      allow create: if emailPM() && id == uid()
+      // Cadastro feito pelo almoxarife (oficial de fora da EsFO)
+      allow create: if almox();
+      allow create: if (emailPM() || (emailInterno() && request.resource.data.perfil == 'almox')) && id == uid()
         && request.resource.data.email == request.auth.token.email.lower()
         && (
           (request.resource.data.perfil in ['cadete', 'almox'] && request.resource.data.ativo == false && request.resource.data.pendente == true)
