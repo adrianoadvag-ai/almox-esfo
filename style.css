@@ -454,3 +454,5 @@ tr.cat-row td{background:var(--surface-2);font-weight:600;font-size:.82rem;color
 .ic-esc input{position:absolute;opacity:0}
 .ic-esc label:has(input:checked){border-color:var(--olive);background:color-mix(in srgb,var(--olive) 12%,var(--surface));font-weight:600}
 @media (max-width:560px){.it-row{grid-template-columns:1fr}.it-row .acts{justify-content:flex-start}.cat-grid2{grid-template-columns:1fr 1fr}.cat-tile{grid-template-columns:1fr;justify-items:start;min-height:0}.cat-ic{grid-row:auto}}
+.tam-sel button .se{color:var(--stamp);font-weight:700;margin-left:.15rem}
+.tam-sel button[aria-pressed="true"] .se{color:var(--gold)}

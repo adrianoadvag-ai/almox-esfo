@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.4.0';
+const VERSAO='1.4.2';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -372,14 +372,13 @@ const noCart=ui.cart.filter(x=>x.itemId===it.id).reduce((a,x)=>a+x.qtd,0);
 return `<div class="card" style="margin-bottom:.6rem"><div class="eq"><div><h3>${esc(it.nome)}</h3>
 <p class="avail">${it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'} · ${esc((UNID[it.unidade]||UNID.un)[0])}${it.campo&&!sug?` · <button class="link" data-act="go" data-v="pf">informe seu tamanho no romaneio</button>`:''}</p></div>
 <button class="btn btn-pri btn-sm" data-act="addCart" data-id="${it.id}">Adicionar</button></div>
-${unico?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=est(it,t).disp;return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" ${d>0?'':'disabled title="Sem estoque"'}>${esc(t)}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).</p>`:''}`}
-${unico&&est(it,(it.tamanhos||[])[0]).disp<=0?'<p class="falta">Sem estoque no momento.</p>':''}
+${unico?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=est(it,t).disp;return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" title="${d>0?'Disponível':'Sem estoque no momento'}">${esc(t)}${d>0?'':'<span class="se" aria-label="sem estoque">•</span>'}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).</p>`:''}`}
+${est(it,sel).disp<=0?`<p class="small c-brass" style="margin-top:.3rem">${unico?'Sem estoque no momento':'Tamanho '+esc(sel)+' sem estoque no momento'}: você pode pedir mesmo assim, e o almoxarifado avisa quando separar.</p>`:''}
 ${noCart?`<p class="small c-ok" style="margin-top:.3rem">${noCart} no pedido</p>`:''}</div>`;}).join('');
 return h;
 }
 function addCart(id){
 const it=item(id);const t=(ui.tamSel||{})[id]||sugTam(it,me())||(it.tamanhos||[])[0]||'Único';
-if(est(it,t).disp<=0){toast('Este tamanho está sem estoque.',true);return;}
 const x=ui.cart.find(c=>c.itemId===id&&c.tam===t);
 if(x){if(x.qtd>=5){toast('Máximo de 5 por item.',true);return;}x.qtd++;}else ui.cart.push({itemId:id,tam:t,qtd:1});
 toast(`${it.nome}${tamTxt(t)?' ('+t+')':''} adicionado.`);render();
@@ -1126,7 +1125,7 @@ const CATALOGO=[
 ['Luvas',[['Luva branca','par','luva','P,M,G,GG'],['Luva de couro','par','luva','P,M,G,GG']]],
 ['Calçados',[['Sapato social','par','calcado','37,38,39,40,41,42,43,44,45,46'],['Polainas','par','','Único']]],
 ['Insígnias e distintivos',[['Platina – 1º ano','par','','Único'],['Platina – 2º ano','par','','Único'],['Platina – 3º ano','par','','Único'],['Losango','un','','Único'],['Dragoneira','un','','Único']]],
-['Acessórios',[['Forragê (cordão de ombro da túnica)','un','','Único'],['Cinto','un','cinto','P,M,G,GG'],['Bucaneiras','par','','Único'],['Guia de espada','un','','Único'],['Gancho','un','','Único'],['Manicaca','un','','Único']]]
+['Acessórios',[['Forragê','un','','Único'],['Cinto','un','cinto','P,M,G,GG'],['Bucaneiras','par','','Único'],['Guia de espada','un','','Único'],['Gancho','un','','Único'],['Manicaca','un','','Único']]]
 ];
 let semeando=false;
 async function semearCatalogo(){
@@ -1150,7 +1149,7 @@ if(acess&&norm(acess.nome)!=='acessorios'){b.update(doc(db,'categorias',acess.id
 // Forragê é cordão de ombro da túnica: sai de Coberturas e vai para Acessórios, tamanho único
 const forr=D.itens.find(i=>norm(i.nome)==='forrage');
 if(forr&&acess&&forr.catId!==acess.id){const semEstoque=(forr.tamanhos||[]).every(t=>!est(forr,t).total);
-b.update(doc(db,'itens',forr.id),{catId:acess.id,nome:'Forragê (cordão de ombro da túnica)',campo:'',...(semEstoque?{tamanhos:['Único'],estoque:{'Único':{total:0,disp:0}}}:{})});n++;}
+b.update(doc(db,'itens',forr.id),{catId:acess.id,nome:'Forragê',campo:'',...(semEstoque?{tamanhos:['Único'],estoque:{'Único':{total:0,disp:0}}}:{})});n++;}
 // Túnica do especial de desfile: branca e cinza
 const tun=D.itens.find(i=>norm(i.nome)==='tunica do uniforme especial de desfile');
 if(tun){b.update(doc(db,'itens',tun.id),{nome:'Túnica branca do uniforme especial de desfile'});n++;
@@ -1553,7 +1552,7 @@ try{const X=await carregarXLSX();
 const linhas=[['Categoria','Item','Tamanho','Quantidade','Unidade','Romaneio','Entrega definitiva'],
 ['Calçados','Sapato social','41',10,'par','calcado','não'],['Calçados','Sapato social','42',8,'par','calcado','não'],
 ['Luvas','Luva branca','M',20,'par','luva','não'],['Uniforme de desfile','Túnica branca do uniforme especial de desfile','G',5,'un','gandola','não'],
-['Acessórios','Forragê (cordão de ombro da túnica)','Único',30,'un','','não']];
+['Acessórios','Forragê','Único',30,'un','','não']];
 const ws=X.utils.aoa_to_sheet(linhas);ws['!cols']=[{wch:24},{wch:46},{wch:10},{wch:12},{wch:10},{wch:12},{wch:18}];
 const inst=X.utils.aoa_to_sheet([['Como preencher'],['Uma linha por item e tamanho. Para itens sem tamanho, escreva "Único" ou deixe em branco.'],
 ['Categoria e Item: se não existirem no sistema, serão criados. Escreva o nome igual ao que já existe para somar ao mesmo item.'],
