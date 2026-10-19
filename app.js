@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.3.0';
+const VERSAO='1.4.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -151,7 +151,7 @@ cobertura:['Cobertura','<path d="M15 14h18l-2 20H17z"/><path d="M11 34q13 7 26 0
 luvas:['Luvas','<path d="M17 42V25q-3-4-5-6.5-1.6-2.6 1-3.3 2-.3 5 4.3V11a2 2 0 0 1 4 0v9V8a2 2 0 0 1 4 0v12V10a2 2 0 0 1 4 0v11-7a2 2 0 0 1 4 0v16q0 8-4 12z"/><path d="M17 36h14"/>'],
 calcados:['Calçados','<path d="M6 32v-9q0-4 4-4h8q4 6 12 8l8 2q4 1 4 5v1H6z"/><path d="M6 38h36"/><path d="M19 23l4-2M22 26l4-2"/>'],
 insignias:['Insígnias','<path d="M24 6l4.5 11 11.5.5-9 7.5 3 12-10-6.5-10 6.5 3-12-9-7.5 11.5-.5z"/>'],
-correame:['Correame','<path d="M4 20h40v8H4z"/><path d="M18 15h12v18H18z"/><path d="M24 20v8"/>'],
+correame:['Acessórios','<path d="M4 20h40v8H4z"/><path d="M18 15h12v18H18z"/><path d="M24 20v8"/>'],
 espada:['Espada','<path d="M24 4v28"/><path d="M21 7l3-3 3 3"/><path d="M16 32h16"/><path d="M24 32v8"/><circle cx="24" cy="42" r="2"/>'],
 generico:['Outros','<path d="M8 16l16-8 16 8v18l-16 8-16-8z"/><path d="M8 16l16 8 16-8M24 24v18"/>']
 };
@@ -466,7 +466,7 @@ if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="cancel
 if(c.status==='separada'&&!a)acoes+=`<button class="btn btn-pri" data-act="assinar" data-id="${c.id}">Assinar recebimento</button>`;
 if(c.status==='cautelada'&&pendentes(c).length)acoes+=c.transferPara?`<button class="btn btn-warn" data-act="desistirTrf" data-id="${c.id}">Desistir da transferência</button>`:`<button class="btn btn-pri" data-act="transferir" data-id="${c.id}">Transferir para outro militar</button>`;
 }
-if(c.assinatura)acoes=`<button class="btn" data-act="termo" data-id="${c.id}">Imprimir termo</button>`+acoes;
+if(c.assinatura)acoes=`<button class="btn" data-act="termo" data-id="${c.id}">Termo de cautela (PDF)</button>`+acoes;
 openModal(`Cautela ${nr(c.num)}`,`<div class="ficha">${stamp(c,true)}<p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>
 ${itensLi(c)}
 <dl class="meta"><dt>Origem</dt><dd>${c.origem==='balcao'?'Cautela no balcão':c.origem==='transferencia'?`Transferência de ${esc(nomeM(c.deUser))} (${nr(c.deNum)})`:'Pedido pelo app'}</dd>
@@ -617,8 +617,8 @@ const separadoDe=(itemId,tam)=>separadas().reduce((a,c)=>a+(c.itens||[]).filter(
 function vAdmin(){
 const v=ui.view||'painel';const u=me();
 const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Em uso',ativasA().filter(atrasada).length],
-['material','Material',0],['militares','Militares',pendCad().length],['hist','Histórico',0]];
-const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial():v==='militares'?vMilitares():v==='hist'?vHist():vPainel();
+['material','Material',0],['militares','Militares',pendCad().length],['hist','Histórico',0],['rel','Relatórios',0]];
+const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial():v==='militares'?vMilitares():v==='hist'?vHist():v==='rel'?vRelatorios():vPainel();
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
 ${nav.map(([k,l,b])=>`<button class="nav-b" data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}><span>${l}</span>${b?`<span class="badge${k==='uso'?' red':''}">${b}</span>`:''}</button>`).join('')}
 <button class="nav-b" data-act="balcao"><span>+ Cautela no balcão</span></button>
@@ -853,7 +853,7 @@ const q=norm(ui.matQ);
 if(ui.matCat&&!D.cats.some(c=>c.id===ui.matCat))ui.matCat=null;
 if(ui.matCat&&!q)return vMaterialCat(D.cats.find(c=>c.id===ui.matCat));
 let h=`<div class="a-head"><div><h1>Material</h1><p>Escolha uma categoria para ver os itens, os tamanhos e o estoque.</p></div>
-<div class="row"><button class="btn" data-act="novaCat">+ Categoria</button><button class="btn btn-pri" data-act="novoItem">+ Item</button></div></div>
+<div class="row"><button class="btn" data-act="importar">Importar planilha (Excel)</button><button class="btn" data-act="novaCat">+ Categoria</button><button class="btn btn-pri" data-act="novoItem">+ Item</button></div></div>
 <div class="filters"><input class="i" data-inp="matQ" placeholder="Buscar item em todas as categorias" value="${esc(ui.matQ)}"></div>`;
 if(q){const its=D.itens.filter(i=>norm(i.nome).includes(q));
 return h+(its.length?`<div class="it-lista">${its.map(rowItem).join('')}</div>`:'<div class="empty">Nenhum item encontrado.</div>');}
@@ -878,7 +878,7 @@ function vMaterialCat(c){
 const its=D.itens.filter(i=>i.catId===c.id);const r=resumoCat(c);
 return `<button class="voltar" data-act="matCat" data-id="">← Todas as categorias</button>
 <div class="cat-topo"><span class="cat-ic">${svgCat(icCat(c))}</span><div style="flex:1;min-width:10rem"><h1>${esc(c.nome)}</h1><p class="muted">${r.n} ${r.n===1?'item':'itens'} · ${r.dis} na prateleira · ${r.uso} em uso · total ${r.tot}</p></div>
-<div class="row"><button class="btn" data-act="editCat" data-id="${c.id}">Editar categoria</button><button class="btn btn-pri" data-act="novoItem" data-cat="${c.id}">+ Item nesta categoria</button></div></div>
+<div class="row"><button class="btn" data-act="importar">Importar planilha</button><button class="btn" data-act="editCat" data-id="${c.id}">Editar categoria</button><button class="btn btn-pri" data-act="novoItem" data-cat="${c.id}">+ Item nesta categoria</button></div></div>
 <p class="small muted" style="margin-bottom:.6rem">Os números grandes mostram quantas peças de cada tamanho estão na prateleira.</p>
 ${its.length?`<div class="it-lista">${its.map(rowItem).join('')}</div>`:'<div class="empty">Nenhum item nesta categoria.</div>'}`;
 }
@@ -990,7 +990,7 @@ openModal(esc(nomeU(u)),`<dl class="dados-mil"><dt>Nome</dt><dd>${esc(u.nome)}</
 <div class="sec-h"><h3>Romaneio</h3></div><dl class="dados-mil">${ROM.map(([k,n])=>`<dt>${n}</dt><dd>${esc((u.romaneio||{})[k]||'—')}</dd>`).join('')}</dl>
 <div class="sec-h"><h3>Cautelas em aberto</h3><span class="muted small">${uso.length}</span></div>${uso.map(c=>cardCautela(c)).join('')||'<p class="muted small">Nenhuma. Pode emitir o "nada consta".</p>'}
 ${cs.length>uso.length?`<p class="small muted">${cs.length-uso.length} cautela(s) encerrada(s) no histórico.</p>`:''}`,
-`<button class="btn" data-act="nadaConsta" data-id="${id}">${uso.length?'Imprimir pendências':'Imprimir nada consta'}</button>
+`<button class="btn" data-act="nadaConsta" data-id="${id}">${uso.length?'Pendências (PDF)':'Nada consta (PDF)'}</button>
 <button class="btn" data-act="editMil" data-id="${id}">Editar dados</button>
 ${id!==sess.userId?`<button class="btn" data-act="perfilMil" data-id="${id}">${u.perfil==='almox'?'Tirar do almoxarifado':'Tornar almoxarife'}</button>
 <button class="btn ${u.ativo?'btn-warn':''}" data-act="ativoMil" data-id="${id}">${u.ativo?'Bloquear acesso':'Liberar acesso'}</button>`:''}`);
@@ -1121,12 +1121,12 @@ else janelaImpressao('Pendências',`<h2>MATERIAL PENDENTE DE DEVOLUÇÃO</h2>${i
 
 /* ============ Catálogo inicial (carregado uma vez, com estoque zerado) ============ */
 const CATALOGO=[
-['Uniforme de desfile',[['Túnica do uniforme especial de desfile','un','gandola','P,M,G,GG,XG'],['Calça do uniforme especial de desfile','un','calca','36,38,40,42,44,46,48,50,52']]],
-['Coberturas',[['Barretina','un','cobertura','54,55,56,57,58,59,60,61,62'],['Forragê','un','cobertura','54,55,56,57,58,59,60,61,62'],['Penacho','un','','Único']]],
+['Uniforme de desfile',[['Túnica branca do uniforme especial de desfile','un','gandola','P,M,G,GG,XG'],['Túnica cinza do uniforme especial de desfile','un','gandola','P,M,G,GG,XG'],['Calça do uniforme especial de desfile','un','calca','36,38,40,42,44,46,48,50,52']]],
+['Coberturas',[['Barretina','un','cobertura','54,55,56,57,58,59,60,61,62'],['Penacho','un','','Único']]],
 ['Luvas',[['Luva branca','par','luva','P,M,G,GG'],['Luva de couro','par','luva','P,M,G,GG']]],
 ['Calçados',[['Sapato social','par','calcado','37,38,39,40,41,42,43,44,45,46'],['Polainas','par','','Único']]],
 ['Insígnias e distintivos',[['Platina – 1º ano','par','','Único'],['Platina – 2º ano','par','','Único'],['Platina – 3º ano','par','','Único'],['Losango','un','','Único'],['Dragoneira','un','','Único']]],
-['Correame e acessórios',[['Cinto','un','cinto','P,M,G,GG'],['Bucaneiras','par','','Único'],['Guia de espada','un','','Único'],['Gancho','un','','Único'],['Manicaca','un','','Único']]]
+['Acessórios',[['Forragê (cordão de ombro da túnica)','un','','Único'],['Cinto','un','cinto','P,M,G,GG'],['Bucaneiras','par','','Único'],['Guia de espada','un','','Único'],['Gancho','un','','Único'],['Manicaca','un','','Único']]]
 ];
 let semeando=false;
 async function semearCatalogo(){
@@ -1137,6 +1137,28 @@ its.forEach(([n,un,campo,tams],ii)=>{const t=tams.split(',').map(s=>s.trim());co
 b.set(doc(collection(db,'itens')),{catId:cid,nome:n,unidade:un,campo,tamanhos:t,estoque:e,consumo:false,ativo:true,ordem:ii*10});});});
 b.update(doc(db,'config','setup'),{seeded:true});await b.commit();toast('Catálogo inicial carregado. Registre as entradas de estoque em "Material".');}
 catch(e){console.error(e);semeando=false;}
+}
+
+/* ============ Ajustes do catálogo inicial (rodam uma vez, no painel do almoxarifado) ============ */
+let migrando=false;
+async function migrarCatalogo(){
+const feitas=(D.setup&&D.setup.migr)||[];if(migrando||!D.setup||!D.setup.seeded||feitas.includes('v14'))return;migrando=true;
+try{const b=writeBatch(db);let n=0;
+// "Correame e acessórios" passa a ser só "Acessórios"
+let acess=D.cats.find(c=>norm(c.nome)==='correame e acessorios')||D.cats.find(c=>norm(c.nome)==='acessorios');
+if(acess&&norm(acess.nome)!=='acessorios'){b.update(doc(db,'categorias',acess.id),{nome:'Acessórios',icone:'correame'});n++;}
+// Forragê é cordão de ombro da túnica: sai de Coberturas e vai para Acessórios, tamanho único
+const forr=D.itens.find(i=>norm(i.nome)==='forrage');
+if(forr&&acess&&forr.catId!==acess.id){const semEstoque=(forr.tamanhos||[]).every(t=>!est(forr,t).total);
+b.update(doc(db,'itens',forr.id),{catId:acess.id,nome:'Forragê (cordão de ombro da túnica)',campo:'',...(semEstoque?{tamanhos:['Único'],estoque:{'Único':{total:0,disp:0}}}:{})});n++;}
+// Túnica do especial de desfile: branca e cinza
+const tun=D.itens.find(i=>norm(i.nome)==='tunica do uniforme especial de desfile');
+if(tun){b.update(doc(db,'itens',tun.id),{nome:'Túnica branca do uniforme especial de desfile'});n++;
+if(!D.itens.some(i=>norm(i.nome).startsWith('tunica cinza'))){const e={};(tun.tamanhos||[]).forEach(t=>e[t]={total:0,disp:0});
+b.set(doc(collection(db,'itens')),{catId:tun.catId,nome:'Túnica cinza do uniforme especial de desfile',unidade:tun.unidade||'un',campo:tun.campo||'gandola',tamanhos:tun.tamanhos||['Único'],estoque:e,consumo:false,ativo:true,ordem:(tun.ordem||0)+5});n++;}}
+b.update(doc(db,'config','setup'),{migr:[...feitas,'v14']});await b.commit();
+if(n)toast('Catálogo ajustado: túnica branca e cinza, forragê em Acessórios.');}
+catch(e){console.error(e);migrando=false;}
 }
 
 /* ============ Eventos ============ */
@@ -1174,7 +1196,7 @@ transferir:el=>transferir(el.dataset.id),
 desistirTrf:el=>desistirTrf(el.dataset.id),
 aceitarTrf:el=>aceitarTrf(el.dataset.id),
 recusarTrf:el=>{if(confirm('Recusar esta transferência?'))recusarTrf(el.dataset.id);},
-termo:el=>termo(el.dataset.id),
+termo:el=>termoPDF(el.dataset.id),
 // almoxarifado
 separar:el=>separar(el.dataset.id),
 confirmarSep:el=>confirmarSep(el.dataset.id),
@@ -1206,7 +1228,11 @@ verMil:el=>verMil(el.dataset.id),
 editMil:el=>editMil(el.dataset.id),
 ativoMil:el=>ativoMil(el.dataset.id),
 perfilMil:el=>perfilMil(el.dataset.id),
-nadaConsta:el=>nadaConsta(el.dataset.id),
+nadaConsta:el=>nadaConstaPDF(el.dataset.id),
+importar:()=>abrirImportar(),
+modeloImp:()=>baixarModelo(),
+impModo:el=>{ui.impModo=el.dataset.m;$$('#f-imp .seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===ui.impModo));if(ui.imp)desenharPreviaImp();},
+confirmarImp:()=>confirmarImp(),
 histTudo:carregarHistTudo,
 csvUso:csvUso,csvHist:csvHist,csvMil:csvMil,backup:backup
 };
@@ -1238,7 +1264,7 @@ const forms={
 'f-bal':()=>balAdd()
 };
 document.addEventListener('submit',e=>{
-const f=e.target;const h=forms[f.id];if(!h)return;e.preventDefault();
+const f=e.target;const h=forms[f.id]||(f.dataset&&f.dataset.rel?gerarRelatorio:null);if(!h)return;e.preventDefault();
 const btn=f.querySelector('button:not([type=button])');if(btn&&btn.disabled)return;
 if(btn&&f.id!=='f-cad'&&f.id!=='f-setup')btn.disabled=true;
 Promise.resolve().then(()=>h(f,new FormData(f))).catch(err=>{console.error(err);toast(erroFirebase(err),true);}).finally(()=>{if(btn&&document.body.contains(btn))btn.disabled=false;});
@@ -1249,6 +1275,7 @@ if(k==='trfq'){filtrarTrf(e.target.value);return;}
 ui[k]=e.target.value;render();
 });
 document.addEventListener('change',e=>{
+if(e.target.dataset&&e.target.dataset.chgimp){const f=e.target.files&&e.target.files[0];if(f)lerImportacao(f);return;}
 const k=e.target.dataset&&e.target.dataset.chg;if(!k||!ui.bal)return;
 if(k==='balMil'){ui.bal.userId=e.target.value;desenharBalcao();}
 if(k==='balIt'){ui.bal.it=e.target.value;desenharBalcao();}
@@ -1280,8 +1307,8 @@ const fontes=adm?[['users',collection(db,'users')],['cats',collection(db,'catego
 ['trfIn',query(collection(db,'cautelas'),where('transferPara','==',uid))],['dir',doc(db,'config','diretorio')]];
 const nomes=fontes.map(f=>f[0]);
 fontes.forEach(([nome,ref])=>{
-const pronto=()=>{if(loaded[nome])return;loaded[nome]=true;if(nomes.every(n=>loaded[n])){fase='app';render();if(adm){publicarDiretorio();semearCatalogo();}}};
-const depois=prim=>{if(prim)pronto();else if(fase==='app'){if(!modal.open)render();if(adm){publicarDiretorio();semearCatalogo();}}};
+const pronto=()=>{if(loaded[nome])return;loaded[nome]=true;if(nomes.every(n=>loaded[n])){fase='app';render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();}}};
+const depois=prim=>{if(prim)pronto();else if(fase==='app'){if(!modal.open)render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();}}};
 const falha=err=>{console.error(nome,err);if(err.code==='permission-denied'&&(nome==='eu'||nome==='users')){loginMsg='Sem permissão de acesso. Procure o almoxarifado.';signOut(auth);return;}
 if(nome==='dir'||nome==='trfIn'||nome==='setup'){pronto();return;}toast(erroFirebase(err),true);pronto();};
 if(ref.type==='document'){
@@ -1357,3 +1384,245 @@ onAuthStateChanged(auth,aoMudarLogin);
 }
 setInterval(()=>{if(fase==='app'&&!modal.open&&!(document.activeElement&&document.activeElement.matches('input,select,textarea')))render();},60000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+/* ============ Relatórios em PDF (mesmo visual do SICAM: faixa azul com o brasão, rodapé com páginas) ============ */
+async function carregarPDFLib(){
+if(window.PDFLib)return window.PDFLib;
+for(const src of ['https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js','https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js']){
+try{await new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=src;sc.onload=res;sc.onerror=rej;document.head.appendChild(sc);});if(window.PDFLib)return window.PDFLib;}catch(e){}
+}
+throw {msg:'Não foi possível carregar o gerador de PDF. Confira a internet e tente de novo.'};
+}
+const winAnsi=s=>String(s==null?'':s).replace(/[“”]/g,'"').replace(/[‘’]/g,"'").replace(/→/g,'->').replace(/✓/g,'OK').replace(/ | /g,' ').replace(/[^\n\x20-\x7E -ÿ–—•€]/g,'');
+let brasaoBytes=null;
+async function brasaoPDF(pdf){try{if(!brasaoBytes){const r=await fetch('brasao-esfo.png');if(!r.ok)throw new Error('brasão');brasaoBytes=await r.arrayBuffer();}return await pdf.embedPng(brasaoBytes);}catch(e){console.warn('brasão no PDF',e);return null;}}
+const carimboArq=()=>{const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;};
+/* Monta o PDF: desenhar(ctx) recebe as ferramentas de escrita (texto, kv, tabela, secao) */
+async function gerarPDF(titulo,sub,arq,desenhar,paisagem){
+const P=await carregarPDFLib();const pdf=await P.PDFDocument.create();
+pdf.setTitle(winAnsi(NOME+' – '+titulo));pdf.setAuthor(winAnsi(nomeM(sess.userId)));pdf.setCreator('Almox EsFO – Almoxarifado da Escola de Formação de Oficiais – APMG');
+const F1=await pdf.embedFont(P.StandardFonts.Helvetica),F2=await pdf.embedFont(P.StandardFonts.HelveticaBold);
+const W=paisagem?841.89:595.28,H=paisagem?595.28:841.89,M=40,azul=P.rgb(0,0.204,0.471),ouro=P.rgb(0.94,0.75,0.13),cinza=P.rgb(0.33,0.39,0.48),preto=P.rgb(0.08,0.13,0.18),linha=P.rgb(0.83,0.86,0.91),claro=P.rgb(0.95,0.96,0.98),verm=P.rgb(0.75,0.15,0.1);
+let pg,y;
+const nova=()=>{pg=pdf.addPage([W,H]);y=H-M;};
+const quebra=(t,f,s,w)=>{const out=[];for(const par of winAnsi(t).split('\n')){let l='';for(const pal of par.split(' ')){const tt=l?l+' '+pal:pal;if(l&&f.widthOfTextAtSize(tt,s)>w){out.push(l);l=pal;}else l=tt;}out.push(l);}return out;};
+const cabe=h=>{if(y-h<M+24){nova();return true;}return false;};
+const texto=(t,o={})=>{const f=o.f||F1,s=o.s||9,x=o.x||M,w=o.w||(W-2*M),c=o.c||preto;for(const l of quebra(t,f,s,w)){cabe(s*1.35);pg.drawText(l,{x,y:y-s,size:s,font:f,color:c});y-=s*1.35;}};
+const kv=(k,v)=>{if(v==null||v==='')return;const kw=140,ks=quebra(k,F2,8.5,kw-10),ls=quebra(String(v),F1,9,W-2*M-kw),alt=Math.max(12*ls.length,11*ks.length);cabe(alt);ks.forEach((l,i)=>pg.drawText(l,{x:M,y:y-9-i*11,size:8.5,font:F2,color:cinza}));ls.forEach((l,i)=>pg.drawText(l,{x:M+kw,y:y-9-i*12,size:9,font:F1,color:preto}));y-=alt+1;};
+const secao=(t,extra)=>{cabe(40);y-=6;pg.drawLine({start:{x:M,y},end:{x:W-M,y},thickness:1.2,color:azul});y-=6;texto(t,{f:F2,s:12});if(extra)texto(extra,{s:8.5,c:cinza});y-=2;};
+/* tabela: cols=[{t:'Título',w:fração,a:'r'}], linhas=[[...]], opções {destaque:i=>bool} */
+const tabela=(cols,linhas,o={})=>{
+const larg=W-2*M,tot=cols.reduce((a,c)=>a+c.w,0),ws=cols.map(c=>c.w/tot*larg),s=8.5,pad=4;
+const cab=()=>{const h=16;cabe(h+14);let x=M;pg.drawRectangle({x:M,y:y-h,width:larg,height:h,color:azul});
+cols.forEach((c,i)=>{const t=quebra(c.t,F2,7.8,ws[i]-2*pad)[0]||'';const tw=F2.widthOfTextAtSize(t,7.8);pg.drawText(t,{x:c.a==='r'?x+ws[i]-pad-tw:x+pad,y:y-11,size:7.8,font:F2,color:P.rgb(1,1,1)});x+=ws[i];});y-=h;};
+cab();
+linhas.forEach((ln,k)=>{const cel=ln.map((v,i)=>quebra(v==null?'':String(v),F1,s,ws[i]-2*pad));const h=Math.max(...cel.map(c=>c.length))*11+6;
+if(cabe(h))cab();
+if(k%2)pg.drawRectangle({x:M,y:y-h,width:larg,height:h,color:claro});
+let x=M;const red=o.destaque&&o.destaque(k);
+cel.forEach((ls,i)=>{ls.forEach((l,j)=>{const tw=F1.widthOfTextAtSize(l,s);pg.drawText(l,{x:cols[i].a==='r'?x+ws[i]-pad-tw:x+pad,y:y-11-j*11,size:s,font:(o.negrito&&o.negrito(k,i))?F2:F1,color:red?verm:preto});});x+=ws[i];});
+y-=h;pg.drawLine({start:{x:M,y},end:{x:W-M,y},thickness:.4,color:linha});});
+if(!linhas.length)texto('Nenhum registro.',{s:9,c:cinza});
+y-=6;
+};
+nova();
+pg.drawRectangle({x:0,y:H-78,width:W,height:78,color:azul});pg.drawRectangle({x:0,y:H-81,width:W,height:3,color:ouro});
+const br=await brasaoPDF(pdf);let tx=M;
+if(br){const h=60,w=h*br.width/br.height;pg.drawImage(br,{x:M,y:H-39-h/2,width:w,height:h});tx=M+w+14;}
+pg.drawText('ALMOX ESFO',{x:tx,y:H-38,size:20,font:F2,color:P.rgb(1,1,1)});
+pg.drawText(winAnsi('Almoxarifado da Escola de Formação de Oficiais – APMG – PMPR'),{x:tx,y:H-56,size:9.5,font:F1,color:P.rgb(0.88,0.92,0.98)});
+y=H-100;
+texto(titulo,{f:F2,s:15});
+texto(`Gerado em ${fmt(nowISO())} por ${nomeM(sess.userId)}${sub?' · '+sub:''}`,{s:9,c:cinza});y-=6;
+await desenhar({texto,kv,tabela,secao,cinza,F1,F2});
+const pags=pdf.getPages();pags.forEach((p,i)=>{p.drawLine({start:{x:M,y:30},end:{x:W-M,y:30},thickness:.5,color:linha});
+p.drawText(winAnsi(`${NOME} – ${titulo}`).slice(0,110),{x:M,y:18,size:7.5,font:F1,color:cinza});
+p.drawText(`${i+1} / ${pags.length}`,{x:W-M-30,y:18,size:7.5,font:F1,color:cinza});});
+baixar(`almox-esfo-${arq}-${carimboArq()}.pdf`,await pdf.save(),'application/pdf');
+toast('Relatório PDF gerado.');
+}
+const tamTxtPdf=t=>tamTxt(t)||'Único';
+/* ----- Tela de relatórios ----- */
+function vRelatorios(){
+const hj=dataInput(nowISO()),ini=dataInput(new Date(Date.now()-30*864e5).toISOString());
+const R=[['estoque','Estoque do almoxarifado','Itens por categoria e tamanho: na prateleira, em uso e total.',''],
+['uso','Material em uso','Todas as cautelas ativas, por militar, com prazo e assinatura.',''],
+['atraso','Cautelas em atraso','Cautelas com prazo de devolução vencido.',''],
+['periodo','Movimentação no período','Cautelas abertas, entregues, devolvidas e transferidas entre duas datas.','periodo'],
+['ocorr','Danos e extravios','Ocorrências registradas nas devoluções.','periodo'],
+['militar','Ficha do militar','Material em aberto e histórico de um militar.','militar']];
+return `<div class="a-head"><div><h1>Relatórios</h1><p>Relatórios em PDF com o cabeçalho do almoxarifado, prontos para imprimir ou arquivar.</p></div></div>
+<div class="it-lista">${R.map(([k,t,d,extra])=>`<form class="it-row" id="f-rel-${k}" data-rel="${k}"><div><h3>${t}</h3><p class="resumo">${d}</p>
+${extra==='periodo'?`<div class="row" style="margin-top:.5rem"><label class="f"><span>De</span><input class="i" type="date" name="de" value="${ini}"></label><label class="f"><span>Até</span><input class="i" type="date" name="ate" value="${hj}"></label></div>`:''}
+${extra==='militar'?`<label class="f" style="margin-top:.5rem"><span>Militar</span><select class="i" name="mil" required><option value="">Escolha…</option>${D.users.filter(u=>!u.pendente).sort((a,b)=>nomeU(a).localeCompare(nomeU(b),'pt-BR')).map(u=>`<option value="${u.id}">${esc(nomeU(u))} – ${esc(turmaU(u))}</option>`).join('')}</select></label>`:''}</div>
+<div class="acts"><button class="btn btn-pri">Gerar PDF</button></div></form>`).join('')}</div>`;
+}
+async function gerarRelatorio(form,fd){
+const k=form.dataset.rel;
+const de=fd.get('de')?new Date(fd.get('de')+'T00:00:00').toISOString():null,ate=fd.get('ate')?new Date(fd.get('ate')+'T23:59:59').toISOString():null;
+const periodoTxt=de?`de ${fmtD(de)} a ${fmtD(ate)}`:'';
+if((k==='periodo'||k==='ocorr'||k==='militar')&&!ui.histTudo)await carregarHistTudo(true);
+const todas=ui.histTudo?baldes.tudo.concat(D.cautelas.filter(c=>!baldes.tudo.some(x=>x.id===c.id))):D.cautelas;
+const linhasCaut=c=>(c.status==='cautelada'?pendentes(c):c.itens||[]).map(l=>`${c.status==='cautelada'?pend(l):l.qtd}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}`).join('\n');
+if(k==='estoque')return gerarPDF('Estoque do almoxarifado','',`estoque`,async T=>{
+let g={tot:0,dis:0,uso:0};
+D.cats.concat(D.itens.some(i=>!D.cats.some(c=>c.id===i.catId))?[{id:null,nome:'Sem categoria'}]:[]).forEach(c=>{
+const its=D.itens.filter(i=>c.id?i.catId===c.id:!D.cats.some(x=>x.id===i.catId));if(!its.length)return;
+const r=c.id?resumoCat(c):{tot:0,dis:0,uso:0};g.tot+=r.tot;g.dis+=r.dis;g.uso+=r.uso;
+T.secao(c.nome,c.id?`${its.length} item(ns) · ${r.dis} na prateleira · ${r.uso} em uso · total ${r.tot}`:'');
+const linhas=[];its.forEach(it=>(it.tamanhos||[]).forEach((t,j)=>{const e=est(it,t);linhas.push([j?'':it.nome,tamTxtPdf(t),e.disp,cauteladoDe(it.id,t),e.total,(UNID[it.unidade]||UNID.un)[1]]);}));
+T.tabela([{t:'Item',w:5},{t:'Tamanho',w:1.4},{t:'Prateleira',w:1.3,a:'r'},{t:'Em uso',w:1.2,a:'r'},{t:'Total',w:1.1,a:'r'},{t:'Unidade',w:1.4}],linhas,{destaque:i=>linhas[i][4]>0&&linhas[i][2]<=0,negrito:(i,col)=>col===0});
+});
+T.secao('Resumo geral');T.kv('Peças na prateleira',g.dis);T.kv('Peças em uso',g.uso);T.kv('Total do almoxarifado',g.tot);
+T.texto('Linhas em vermelho: tamanho esgotado na prateleira.',{s:8,c:T.cinza});
+});
+if(k==='uso'||k==='atraso'){
+let l=ativasA();if(k==='atraso')l=l.filter(atrasada);
+l.sort((a,b)=>nomeM(a.userId).localeCompare(nomeM(b.userId),'pt-BR'));
+if(!l.length){toast(k==='atraso'?'Não há cautelas em atraso.':'Não há material em uso.',true);return;}
+return gerarPDF(k==='atraso'?'Cautelas em atraso':'Material em uso',`${l.length} cautela(s)`,k,async T=>{
+T.tabela([{t:'Nº',w:.9},{t:'Militar',w:2.6},{t:'Turma / OPM',w:2},{t:'Material em uso',w:4},{t:'Desde',w:1.2},{t:'Devolver até',w:1.3}],
+l.map(c=>{const u=user(c.userId);return [nr(c.num),nomeU(u),turmaU(u),linhasCaut(c),fmtD(c.entregueEm||c.criadoEm),c.prazo?fmtD(c.prazo)+(atrasada(c)?' (atraso)':''):'sem prazo'];}),{destaque:i=>atrasada(l[i])});
+const soma={};l.forEach(c=>pendentes(c).forEach(x=>{const kk=x.nome+'|'+x.tam;soma[kk]=soma[kk]||[x.nome,tamTxtPdf(x.tam),0];soma[kk][2]+=pend(x);}));
+T.secao('Totais por item');T.tabela([{t:'Item',w:5},{t:'Tamanho',w:1.5},{t:'Peças',w:1,a:'r'}],Object.values(soma).sort((a,b)=>a[0].localeCompare(b[0],'pt-BR')));
+},true);}
+if(k==='periodo'){
+const ev=[];todas.forEach(c=>(c.log||[]).forEach(x=>{if(x.t>=de&&x.t<=ate)ev.push({c,x});}));
+ev.sort((a,b)=>String(a.x.t).localeCompare(String(b.x.t)));
+if(!ev.length){toast('Nenhuma movimentação no período.',true);return;}
+return gerarPDF('Movimentação no período',periodoTxt,'movimentacao',async T=>{
+const cont={};ev.forEach(e=>cont[e.x.a]=(cont[e.x.a]||0)+1);
+T.secao('Resumo');Object.entries(cont).forEach(([a,n])=>T.kv(a,n));
+T.secao('Eventos');T.tabela([{t:'Data',w:1.5},{t:'Nº',w:.9},{t:'Militar',w:2.3},{t:'Evento',w:2},{t:'Material',w:3.6},{t:'Por',w:1.8}],
+ev.map(({c,x})=>[fmt(x.t),nr(c.num),nomeM(c.userId),x.a+(x.obs?'\n'+x.obs:''),linhasCaut({...c,status:'x'}),nomeM(x.por)]));
+},true);}
+if(k==='ocorr'){
+const oc=[];todas.forEach(c=>(c.ocorrencias||[]).forEach(o=>{if(o.t>=de&&o.t<=ate)oc.push({c,o});}));
+if(!oc.length){toast('Nenhum dano ou extravio no período.',true);return;}
+return gerarPDF('Danos e extravios',periodoTxt,'ocorrencias',async T=>{
+T.tabela([{t:'Data',w:1.4},{t:'Nº',w:.9},{t:'Militar',w:2.3},{t:'Item',w:3},{t:'Qtd',w:.6,a:'r'},{t:'Situação',w:1.3},{t:'Observação',w:3}],
+oc.map(({c,o})=>[fmt(o.t),nr(c.num),nomeM(c.userId),o.nome+(tamTxt(o.tam)?' ('+o.tam+')':''),o.qtd,o.estado,o.obs||'']));
+},true);}
+if(k==='militar'){
+const id=fd.get('mil');const u=user(id);const cs=todas.filter(c=>c.userId===id).sort((a,b)=>String(b.criadoEm).localeCompare(String(a.criadoEm)));
+const abertas=cs.filter(c=>c.status==='cautelada'||c.status==='separada');
+return gerarPDF('Ficha do militar',nomeU(u),'ficha-'+norm(u.guerra||'militar').replace(/\W+/g,''),async T=>{
+T.secao('Identificação');T.kv('Militar',`${nomeU(u)} – ${u.nome||''}`);T.kv('RG',u.rg);T.kv(u.tipo==='oficial'?'OPM':'Turma',u.tipo==='oficial'?u.opm:[u.turma,turmaU(u)].filter(Boolean).join(' · '));T.kv('E-mail',u.email);T.kv('Telefone',u.telefone);
+T.secao('Romaneio');ROM.forEach(([kk,n])=>T.kv(n,(u.romaneio||{})[kk]||'—'));
+T.secao('Material em aberto',abertas.length?'':'Nada consta: nenhum material pendente de devolução.');
+if(abertas.length)T.tabela([{t:'Nº',w:.9},{t:'Material',w:5},{t:'Prazo',w:1.4},{t:'Assinatura',w:2.6}],abertas.map(c=>[nr(c.num),linhasCaut(c),c.prazo?fmtD(c.prazo):'sem prazo',c.assinatura?fmt(c.assinatura.em)+' – '+(c.assinatura.metodo||''):'pendente']));
+T.secao('Histórico de cautelas');T.tabela([{t:'Nº',w:.9},{t:'Situação',w:1.6},{t:'Material',w:5},{t:'Atualizada',w:1.6}],cs.map(c=>[nr(c.num),(ST[c.status]||[c.status])[0],linhasCaut({...c,status:'x'}),fmt(c.atualizadoEm||c.criadoEm)]));
+});}
+}
+/* Termo de cautela e nada consta também em PDF */
+async function termoPDF(id){
+const c=C(id);if(!c)return;const u=user(c.userId);const a=c.assinatura||{};
+await gerarPDF(`Termo de cautela ${nr(c.num)}`,'',`termo-${c.num}`,async T=>{
+T.secao('Militar');T.kv('Militar',`${nomeU(u)} – ${u.nome||''}`);T.kv('RG',u.rg);T.kv(u.tipo==='oficial'?'OPM':'Turma',u.tipo==='oficial'?u.opm:[u.turma,turmaU(u)].filter(Boolean).join(' · '));
+T.kv('Devolver até',c.prazo?fmtD(c.prazo):'Sem prazo definido');T.kv('Situação',(ST[c.status]||[c.status])[0]);
+T.secao('Material');T.tabela([{t:'Item',w:5},{t:'Tamanho',w:1.4},{t:'Qtd',w:.8,a:'r'},{t:'Devolvido',w:1.2,a:'r'},{t:'Transferido',w:1.3,a:'r'}],(c.itens||[]).map(x=>[x.nome+(x.consumo?' (entrega definitiva)':''),tamTxtPdf(x.tam),x.qtd,x.dev||0,x.trf||0]));
+T.texto(`Declaro que recebi do Almoxarifado da Escola de Formação de Oficiais o material acima relacionado, em perfeitas condições de uso, comprometendo-me a zelar por sua guarda e conservação e a devolvê-lo ${c.prazo?'até '+fmtD(c.prazo):'quando solicitado'}, ciente de que responderei pelo extravio ou dano causado por mau uso.`,{s:9.5});
+T.secao('Assinatura eletrônica');T.kv('Assinado por',nomeM(a.por||c.userId));T.kv('Data e hora',fmt(a.em));T.kv('Forma',FORMA[a.metodo]||a.metodo||'');T.kv('Código (SHA-256)',a.hash);T.kv('Texto assinado',a.dados);
+if((c.log||[]).length){T.secao('Andamento');T.tabela([{t:'Data',w:1.5},{t:'Evento',w:2.2},{t:'Por',w:2},{t:'Observação',w:3.5}],c.log.map(x=>[fmt(x.t),x.a,nomeM(x.por),x.obs||'']));}
+});
+}
+async function nadaConstaPDF(id){
+const u=user(id);const uso=D.cautelas.filter(c=>c.userId===id&&(c.status==='cautelada'||c.status==='separada'));
+await gerarPDF(uso.length?'Material pendente de devolução':'Declaração de nada consta','',(uso.length?'pendencias-':'nada-consta-')+norm(u.guerra||'').replace(/\W+/g,''),async T=>{
+T.secao('Militar');T.kv('Militar',`${nomeU(u)} – ${u.nome||''}`);T.kv('RG',u.rg);T.kv(u.tipo==='oficial'?'OPM':'Turma',u.tipo==='oficial'?u.opm:[u.turma,turmaU(u)].filter(Boolean).join(' · '));
+if(!uso.length){T.secao('Declaração');T.texto('Declaro, para os devidos fins, que NADA CONSTA em nome do militar acima identificado no Almoxarifado da Escola de Formação de Oficiais, não havendo material cautelado pendente de devolução até a presente data.',{s:10.5});
+T.texto('\n\n\n_____________________________________________',{s:10});T.texto(nomeM(sess.userId),{s:10,f:T.F2});T.texto('Responsável pelo Almoxarifado – EsFO',{s:9});}
+else{T.secao('Material pendente');T.tabela([{t:'Nº',w:.9},{t:'Item',w:4.5},{t:'Tamanho',w:1.3},{t:'Qtd',w:.8,a:'r'},{t:'Prazo',w:1.4}],
+uso.flatMap(c=>(c.status==='separada'?c.itens:pendentes(c)).map(x=>[nr(c.num),x.nome,tamTxtPdf(x.tam),c.status==='separada'?x.qtd:pend(x),c.prazo?fmtD(c.prazo):'—'])));}
+});
+}
+
+/* ============ Importar material por planilha do Excel (como no SICAM) ============ */
+async function carregarXLSX(){
+if(window.XLSX)return window.XLSX;
+await new Promise((res,rej)=>{const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+sc.onload=res;sc.onerror=()=>rej({msg:'Não foi possível carregar o leitor de planilhas. Confira a internet.'});document.head.appendChild(sc);});
+return window.XLSX;
+}
+const SIN_IMP=[['categoria',['categoria','grupo','classe']],['item',['item','material','nome','descricao','denominacao','peca']],['tamanho',['tamanho','tam','numero','numeracao','medida']],
+['qtd',['quantidade','qtd','qtde','quant','estoque','saldo']],['unidade',['unidade','un','und']],['romaneio',['romaneio','sugerirtamanho','campo']],['definitiva',['entregadefinitiva','definitiva','consumo']]];
+const chave=s=>norm(s).replace(/[^a-z0-9]/g,'');
+function mapaImp(cab){const m={};cab.forEach((h,i)=>{const k=chave(h);for(const [campo,sins] of SIN_IMP){if(m[campo]==null&&sins.some(x=>k===x||k.startsWith(x))){m[campo]=i;break;}}});return m;}
+async function baixarModelo(){
+try{const X=await carregarXLSX();
+const linhas=[['Categoria','Item','Tamanho','Quantidade','Unidade','Romaneio','Entrega definitiva'],
+['Calçados','Sapato social','41',10,'par','calcado','não'],['Calçados','Sapato social','42',8,'par','calcado','não'],
+['Luvas','Luva branca','M',20,'par','luva','não'],['Uniforme de desfile','Túnica branca do uniforme especial de desfile','G',5,'un','gandola','não'],
+['Acessórios','Forragê (cordão de ombro da túnica)','Único',30,'un','','não']];
+const ws=X.utils.aoa_to_sheet(linhas);ws['!cols']=[{wch:24},{wch:46},{wch:10},{wch:12},{wch:10},{wch:12},{wch:18}];
+const inst=X.utils.aoa_to_sheet([['Como preencher'],['Uma linha por item e tamanho. Para itens sem tamanho, escreva "Único" ou deixe em branco.'],
+['Categoria e Item: se não existirem no sistema, serão criados. Escreva o nome igual ao que já existe para somar ao mesmo item.'],
+['Quantidade: número de peças (ou pares) que estão entrando no almoxarifado.'],['Unidade: un, par ou conj. Romaneio (opcional): gandola, camisa, calca, calcado, cobertura, luva ou cinto.'],
+['Entrega definitiva (opcional): "sim" para material que o militar não devolve.']]);inst['!cols']=[{wch:110}];
+const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,'Material');X.utils.book_append_sheet(wb,inst,'Instruções');
+X.writeFile(wb,'modelo-importacao-almox-esfo.xlsx');}catch(e){toast(erroFirebase(e),true);}
+}
+function abrirImportar(){
+ui.imp=null;
+openModal('Importar material de planilha',`<form id="f-imp" class="stack">
+<p class="small">Use uma planilha do Excel com as colunas <b>Categoria, Item, Tamanho e Quantidade</b> (Unidade, Romaneio e Entrega definitiva são opcionais). <button type="button" class="link" data-act="modeloImp">Baixar planilha modelo</button></p>
+<label class="f"><span>Arquivo (.xlsx, .xls ou .csv)</span><input class="i" type="file" id="imp-arq" accept=".xlsx,.xls,.csv" data-chgimp="1"></label>
+<div class="seg" role="group"><button type="button" data-act="impModo" data-m="somar" aria-pressed="${(ui.impModo||'somar')==='somar'}">Somar ao estoque (entrada)</button><button type="button" data-act="impModo" data-m="substituir" aria-pressed="${ui.impModo==='substituir'}">Substituir pela planilha (inventário)</button></div>
+<div id="imp-previa"><p class="small muted">Escolha o arquivo para ver a prévia. Nada é gravado antes de você confirmar.</p></div>
+<label class="f"><span>Origem / documento</span><input class="i" name="obs" placeholder="Ex.: Inventário inicial 2026"></label>
+<p class="erro" id="imp-erro"></p></form>`,`<button class="btn" data-act="fechar">Cancelar</button><button class="btn btn-pri" data-act="confirmarImp" id="imp-ok" disabled>Importar</button>`);
+}
+async function lerImportacao(file){
+const err=m=>{$('#imp-erro').textContent=m;};err('');
+try{const X=await carregarXLSX();const wb=X.read(await file.arrayBuffer(),{type:'array'});
+const aba=wb.SheetNames.find(n=>norm(n).startsWith('material'))||wb.SheetNames[0];
+const rows=X.utils.sheet_to_json(wb.Sheets[aba],{header:1,defval:'',raw:false}).filter(r=>r.some(v=>String(v).trim()!==''));
+if(rows.length<2)return err('A planilha está vazia.');
+const hi=rows.findIndex(r=>{const m=mapaImp(r);return m.item!=null&&m.qtd!=null;});if(hi<0)return err('Não encontrei as colunas "Item" e "Quantidade". Use a planilha modelo.');
+const m=mapaImp(rows[hi]);const g=(r,c)=>m[c]==null?'':String(r[m[c]]==null?'':r[m[c]]).trim();
+const linhas=[];const erros=[];
+rows.slice(hi+1).forEach((r,i)=>{const nome=g(r,'item');if(!nome)return;const q=parseInt(String(g(r,'qtd')).replace(/\D/g,''),10);
+if(isNaN(q)||q<0){erros.push(`Linha ${hi+i+2}: quantidade inválida`);return;}
+let tam=g(r,'tamanho').toUpperCase();if(!tam||norm(tam)==='unico')tam='Único';
+const un=chave(g(r,'unidade'));const rom=chave(g(r,'romaneio'));
+linhas.push({cat:g(r,'categoria')||'Outros',nome,tam,q,unidade:un.startsWith('par')?'par':un.startsWith('conj')?'conj':'un',campo:ROM.some(([k])=>k===rom)?rom:'',consumo:/^s/.test(chave(g(r,'definitiva')))});});
+if(!linhas.length)return err('Nenhuma linha com item e quantidade.'+(erros.length?' '+erros.join('; '):''));
+// agrupa por categoria + item + tamanho
+const ag={};linhas.forEach(l=>{const k=chave(l.cat)+'|'+chave(l.nome)+'|'+l.tam;if(ag[k])ag[k].q+=l.q;else ag[k]={...l};});
+ui.imp={linhas:Object.values(ag),erros,arq:file.name};desenharPreviaImp();
+}catch(e){console.error(e);err(erroFirebase(e));}
+}
+function planoImp(){
+const novasCat={},novosItens={};
+return ui.imp.linhas.map(l=>{const c=D.cats.find(x=>chave(x.nome)===chave(l.cat));const it=c?D.itens.find(x=>x.catId===c.id&&chave(x.nome)===chave(l.nome)):null;
+const st=[];if(!c&&!novasCat[chave(l.cat)]){st.push('nova categoria');novasCat[chave(l.cat)]=1;}
+if(!it&&!novosItens[chave(l.cat)+chave(l.nome)]){st.push('novo item');novosItens[chave(l.cat)+chave(l.nome)]=1;}
+else if(it&&!(it.tamanhos||[]).includes(l.tam))st.push('novo tamanho');
+const atual=it?est(it,l.tam).disp:0;return {...l,c,it,st,atual};});
+}
+function desenharPreviaImp(){
+const p=planoImp();const modo=ui.impModo||'somar';
+$('#imp-previa').innerHTML=`<p class="small"><b>${esc(ui.imp.arq)}</b>: ${p.length} linha(s)${ui.imp.erros.length?` · <span class="c-stamp">${ui.imp.erros.length} ignorada(s)</span>`:''}</p>
+<div class="tbl-wrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Categoria</th><th>Item</th><th>Tam.</th><th>Prateleira hoje</th><th>${modo==='somar'?'Entrada':'Nova contagem'}</th><th></th></tr></thead><tbody>
+${p.map(l=>`<tr><td>${esc(l.cat)}</td><td>${esc(l.nome)}</td><td>${esc(l.tam)}</td><td>${l.atual}</td><td><b>${modo==='somar'?'+'+l.q:l.q}</b></td><td>${l.st.map(s=>`<span class="tag">${s}</span>`).join(' ')}</td></tr>`).join('')}</tbody></table></div>
+${ui.imp.erros.length?`<p class="small c-stamp">${ui.imp.erros.map(esc).join('<br>')}</p>`:''}`;
+const b=$('#imp-ok');if(b)b.disabled=!p.length;
+}
+async function confirmarImp(){
+if(!ui.imp)return;const modo=ui.impModo||'somar';const obs=String(($('#f-imp [name=obs]')||{}).value||'').trim()||('Planilha '+ui.imp.arq);
+const p=planoImp();const b=writeBatch(db);const catIds={},itens={};let ordC=(D.cats.length+1)*10;
+p.forEach(l=>{
+let cid=l.c?l.c.id:catIds[chave(l.cat)];
+if(!cid){cid=uidNovo();catIds[chave(l.cat)]=cid;const nc={id:cid,nome:l.cat};b.set(doc(db,'categorias',cid),{nome:l.cat,ordem:ordC,icone:icCat(nc)});ordC+=10;}
+const ki=cid+'|'+chave(l.nome);
+if(!itens[ki]){const it=l.it;itens[ki]=it?{id:it.id,novo:false,o:{tamanhos:[...(it.tamanhos||[])],estoque:JSON.parse(JSON.stringify(it.estoque||{}))},nome:it.nome}
+:{id:uidNovo(),novo:true,nome:l.nome,o:{catId:cid,nome:l.nome,unidade:l.unidade,campo:l.campo,tamanhos:[],estoque:{},consumo:l.consumo,ativo:true,ordem:D.itens.filter(i=>i.catId===cid).length*10},mov:{}};itens[ki].mov=itens[ki].mov||{};}
+const x=itens[ki];if(!x.o.tamanhos.includes(l.tam))x.o.tamanhos.push(l.tam);
+const e=x.o.estoque[l.tam]||{total:0,disp:0};
+if(modo==='somar'){e.total+=l.q;e.disp+=l.q;x.mov[l.tam]=(x.mov[l.tam]||0)+l.q;}else{const d=l.q-e.disp;e.disp=l.q;e.total=Math.max(0,e.total+d);x.mov[l.tam]=d;}
+x.o.estoque[l.tam]=e;});
+Object.values(itens).forEach(x=>{if(x.o.tamanhos.length>1&&!((x.o.estoque['Único']||{}).total>0)){x.o.tamanhos=x.o.tamanhos.filter(t=>t!=='Único');delete x.o.estoque['Único'];}
+if(x.novo)b.set(doc(db,'itens',x.id),x.o);else b.update(doc(db,'itens',x.id),{tamanhos:x.o.tamanhos,estoque:x.o.estoque});
+b.set(doc(collection(db,'movimentos')),{t:nowISO(),tipo:modo==='somar'?'entrada':'inventario',itemId:x.id,nome:x.nome,tams:x.mov,obs:obs+' (importação)',por:sess.userId});});
+try{await b.commit();closeModal();ui.imp=null;toast(`Importação concluída: ${p.length} linha(s).`);}catch(e){$('#imp-erro').textContent=erroFirebase(e);}
+}
