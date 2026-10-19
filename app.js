@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.0.0';
+const VERSAO='1.1.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -145,70 +145,87 @@ function vNaoConfig(){return `<main class="login"><div class="login-card stack">
 function vErro(){return `<main class="login"><div class="login-card stack">${cab('Não foi possível conectar')}<p class="erro">${esc(erroMsg)}</p><button class="btn btn-pri btn-block" data-act="recarregar">Tentar de novo</button></div></main>`;}
 function vCarregando(){return `<div class="loading"><div><div class="spin"></div>Carregando…</div></div>`;}
 
-/* Campos de dados pessoais e romaneio (cadastro, perfil e edição pelo almoxarife) */
-function camposDados(u,o){
-u=u||{};o=o||{};const tipo=u.tipo||o.tipo||'cadete';const ro=o.ro?'readonly':'';
+/* ----- Campos de formulário ----- */
+// Identificação: pedida no cadastro (como no SICAM)
+function camposIdent(u,tipo){
+u=u||{};
 const grad=tipo==='oficial'
-?`<label class="f"><span>Posto</span><select class="i" name="grad" required ${o.ro?'disabled':''}>${POSTOS.map(p=>`<option ${u.grad===p?'selected':''}>${p}</option>`).join('')}</select></label>`
-:`<label class="f"><span>Graduação</span><input class="i" name="grad" value="${esc(u.grad||'Cad PM')}" required ${ro}></label>`;
-return `<div class="grid2">${grad}<label class="f"><span>Nome de guerra</span><input class="i" name="guerra" value="${esc(u.guerra||'')}" required ${ro}></label></div>
-<label class="f"><span>Nome completo</span><input class="i" name="nome" value="${esc(u.nome||'')}" required ${ro}></label>
-<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" required inputmode="numeric" ${ro}></label>
+?`<label class="f"><span>Posto</span><select class="i" name="grad" required>${POSTOS.map(p=>`<option ${u.grad===p?'selected':''}>${p}</option>`).join('')}</select></label>`
+:`<label class="f"><span>Graduação</span><input class="i" name="grad" value="${esc(u.grad||'Cad PM')}" required></label>`;
+return `<div class="grid2">${grad}<label class="f"><span>Nome de guerra</span><input class="i" name="guerra" value="${esc(u.guerra||'')}" required></label></div>
+<label class="f"><span>Nome completo</span><input class="i" name="nome" value="${esc(u.nome||'')}" required></label>`;
+}
+// Dados complementares: preenchidos pelo próprio militar dentro do sistema ("Meus dados")
+function camposComp(u){
+u=u||{};
+return `<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" required inputmode="numeric"></label>
 <label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" value="${esc(u.telefone||'')}" inputmode="tel" placeholder="(41) 9…"></label></div>
-${tipo==='oficial'
-?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" required ${ro} placeholder="Ex.: 12º BPM"></label>`
+${u.tipo==='oficial'
+?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" required placeholder="Ex.: 12º BPM"></label>`
 :`<div class="grid2"><label class="f"><span>Ano do curso</span><select class="i" name="ano" required>${ANOS.map(([v,n])=>`<option value="${v}" ${String(u.ano||'1')===v?'selected':''}>${n}</option>`).join('')}</select></label>
 <label class="f"><span>Pelotão</span><input class="i" name="pelotao" value="${esc(u.pelotao||'')}" required placeholder="Ex.: 1º Pelotão Alfa"></label></div>
-<label class="f"><span>Turma</span><input class="i" name="turma" value="${esc(u.turma||'')}" placeholder="Ex.: 1º CFO PM 2026"></label>`}
-<h3 style="margin-top:1rem">Romaneio</h3><p class="small muted">Suas medidas. O sistema usa para sugerir o tamanho certo de cada peça.</p>
-<div class="romaneio">${ROM.map(([k,n])=>`<label class="f"><span>${n}</span><input class="i" name="rom_${k}" value="${esc((u.romaneio||{})[k]||'')}" autocapitalize="characters"></label>`).join('')}</div>`;
+<label class="f"><span>Turma</span><input class="i" name="turma" value="${esc(u.turma||'')}" placeholder="Ex.: 1º CFO PM 2026"></label>`}`;
 }
+function camposRom(u){
+u=u||{};
+return `<div class="romaneio">${ROM.map(([k,n])=>`<label class="f"><span>${n}</span><input class="i" name="rom_${k}" value="${esc((u.romaneio||{})[k]||'')}" autocapitalize="characters"></label>`).join('')}</div>`;
+}
+// Tudo junto (edição pelo almoxarife)
+const camposDados=u=>camposIdent(u,u.tipo)+camposComp(u)+`<h3 style="margin-top:1rem">Romaneio</h3>`+camposRom(u);
 function lerDados(fd,tipo){
-const g=k=>String(fd.get(k)||'').trim();
-const romaneio={};ROM.forEach(([k])=>{const v=g('rom_'+k).toUpperCase();if(v)romaneio[k]=v;});
-const o={grad:g('grad'),guerra:g('guerra').toUpperCase(),nome:g('nome'),rg:g('rg'),telefone:g('telefone'),romaneio};
-if(tipo==='oficial')o.opm=g('opm');else{o.ano=g('ano');o.pelotao=g('pelotao');o.turma=g('turma');}
+const g=k=>String(fd.get(k)||'').trim();const tem=k=>fd.has(k);
+const o={};
+if(tem('grad'))o.grad=g('grad');if(tem('guerra'))o.guerra=g('guerra').toUpperCase();if(tem('nome'))o.nome=g('nome');
+if(tem('rg'))o.rg=g('rg');if(tem('telefone'))o.telefone=g('telefone');
+if(tipo==='oficial'){if(tem('opm'))o.opm=g('opm');}else{if(tem('ano'))o.ano=g('ano');if(tem('pelotao'))o.pelotao=g('pelotao');if(tem('turma'))o.turma=g('turma');}
+if(tem('rom_'+ROM[0][0])){o.romaneio={};ROM.forEach(([k])=>{const v=g('rom_'+k).toUpperCase();if(v)o.romaneio[k]=v;});}
 return o;
 }
+/* Dados mínimos para pedir material: RG, pelotão (ou OPM) e romaneio */
+const dadosCompletos=u=>!!(u&&u.rg&&(u.tipo==='oficial'?u.opm:u.pelotao)&&u.romaneio&&Object.keys(u.romaneio).length);
+
+/* ----- Telas ----- */
+const campoEmailSenha=()=>`<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>
+<div class="grid2"><label class="f"><span>Crie uma senha (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
+<label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>`;
 function vSetup(){
-return `<main class="login"><div class="login-card">${cab('Configuração inicial')}
-<form id="f-setup" class="stack" autocomplete="off">
-<p class="aviso">Esta tela só aparece uma vez. A conta criada aqui será a do <b>responsável pelo almoxarifado</b>, que depois libera os cadastros dos cadetes e oficiais.</p>
-${camposDados({},{tipo:'cadete'})}
-<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>
-<div class="grid2"><label class="f"><span>Senha (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
-<label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>
+return `<main class="login restrito"><div class="login-card">${cab('Configuração inicial')}
+<form id="f-setup" class="stack" autocomplete="off" data-tipo="cadete" data-perfil="almox">
+<p class="aviso">Esta tela só aparece uma vez. A conta criada aqui será a do <b>responsável pelo almoxarifado</b>, que depois libera os cadastros dos cadetes, dos oficiais e de outros auxiliares do almoxarifado.</p>
+${camposIdent({},'cadete')}${campoEmailSenha()}
 <label class="check"><input type="checkbox" name="seed" checked><span>Carregar o catálogo inicial do almoxarifado (fardamento, coberturas, luvas, calçados, insígnias e acessórios), com estoque zerado</span></label>
 <p class="erro" id="setup-erro"></p>
 <button class="btn btn-pri btn-block">Criar conta do almoxarifado</button>
 </form></div></main>`;
 }
 function vLogin(){
-return `<main class="login"><div class="login-card">${cab('Almoxarifado · EsFO · APMG')}
+const r=ui.tela==='almox';
+return `<main class="login${r?' restrito':''}"><div class="login-card">${cab(r?'Painel do almoxarifado':'Almoxarifado · EsFO · APMG')}
+${r?'<p style="margin:-.4rem 0 1rem"><span class="stamp c-stamp">Acesso restrito</span></p>':''}
 <form id="f-login" class="stack" autocomplete="on">
 <label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" autocomplete="username" inputmode="email" placeholder="nome@${esc(DOMINIOS[0])}"></label>
 <label class="f"><span>Senha</span><input class="i" name="senha" type="password" required autocomplete="current-password"></label>
 <p class="erro" id="login-erro">${esc(loginMsg)}</p>
-<button class="btn btn-pri btn-block">Entrar</button>
+<button class="btn btn-pri btn-block">${r?'Entrar no painel':'Entrar'}</button>
 </form>
-<div class="row between" style="margin-top:1rem"><button class="link" data-act="esqueci">Esqueci minha senha</button><button class="link" data-act="irCadastro">Criar minha conta</button></div>
-<div style="text-align:center">${seletorTema()}</div><p class="versao-app">${NOME} v${VERSAO}</p>
+<div class="row between" style="margin-top:1rem"><button class="link" data-act="esqueci">Esqueci minha senha</button>
+<button class="link" data-act="irCadastro" data-p="${r?'almox':'cadete'}">${r?'Solicitar conta do almoxarifado':'Criar minha conta'}</button></div>
+<p class="acesso-f">${r?'<button class="link muted" data-act="tela" data-t="cadete">← Voltar ao acesso dos cadetes</button>':'<button class="link muted" data-act="tela" data-t="almox">Acesso restrito do almoxarifado</button>'}</p>
+${r?'':`<div style="text-align:center">${seletorTema()}</div>`}<p class="versao-app">${NOME} v${VERSAO}</p>
 </div></main>`;
 }
 function vCadastro(){
-const t=ui.cadTipo;
-return `<main class="login"><div class="login-card">${cab('Criar minha conta')}
-<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>
-<form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}">
-${camposDados({},{tipo:t})}
-<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>
-<div class="grid2"><label class="f"><span>Crie uma senha (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
-<label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>
-<p class="small muted">A senha também serve para <b>assinar</b> as cautelas (ou use digital/Face ID depois de ativar no Perfil).</p>
-<label class="check"><input type="checkbox" name="lgpd" required><span>Autorizo o uso dos meus dados pessoais e do romaneio exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>
+const almox=ui.cadPerfil==='almox';const t=almox?'cadete':ui.cadTipo;
+return `<main class="login${almox?' restrito':''}"><div class="login-card">${cab(almox?'Solicitar conta do almoxarifado':'Criar minha conta')}
+${almox?'<p class="aviso" style="margin-bottom:1rem">A conta do almoxarifado só funciona depois de confirmar o e-mail e de ser aprovada pelo responsável pelo almoxarifado.</p>'
+:`<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>`}
+<form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}" data-perfil="${almox?'almox':'cadete'}">
+${camposIdent({},t)}${campoEmailSenha()}
+<p class="small muted">A senha também serve para <b>assinar</b> as cautelas.${almox?'':' Depois de entrar, você completa seus dados e o romaneio em "Meus dados".'}</p>
+<label class="check"><input type="checkbox" name="lgpd" required><span>Autorizo o uso dos meus dados pessoais exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>
 <p class="small muted">Você vai receber um link no e-mail institucional para confirmar a conta. Depois, o almoxarifado libera seu acesso.</p>
 <p class="erro" id="cad-erro"></p>
-<button class="btn btn-pri btn-block">Criar conta</button>
+<button class="btn btn-pri btn-block">${almox?'Solicitar conta':'Criar conta'}</button>
 <button type="button" class="btn btn-block" data-act="irLogin">Já tenho conta</button>
 </form></div></main>`;
 }
@@ -231,37 +248,37 @@ return `<main class="login"><div class="login-card stack">${cab('Cadastro recebi
 
 async function fazerLogin(fd){
 const email=String(fd.get('email')||'').trim().toLowerCase();
-loginMsg='';
+loginMsg='';ui.telaLogin=ui.tela;
 try{await signInWithEmailAndPassword(auth,email,String(fd.get('senha')||''));}
-catch(e){$('#login-erro').textContent=erroFirebase(e);}
+catch(e){ui.telaLogin=null;$('#login-erro').textContent=erroFirebase(e);}
 }
 async function fazerCadastro(form,fd,setup){
 const errEl=$(setup?'#setup-erro':'#cad-erro');const err=m=>{errEl.textContent=m;};
 const email=String(fd.get('email')||'').trim().toLowerCase();
 if(!dominioOk(email))return err(`Use seu e-mail institucional (@${DOMINIOS[0]}).`);
 if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
-const tipo=setup?'cadete':(form.dataset.tipo||'cadete');
+const tipo=form.dataset.tipo||'cadete',perfil=form.dataset.perfil||'cadete';
 const dados=lerDados(fd,tipo);
-if(!dados.guerra||!dados.nome||!dados.rg)return err('Preencha nome, nome de guerra e RG.');
-const btn=form.querySelector('button.btn-pri');btn.disabled=true;btn.textContent='Criando…';
+if(!dados.guerra||!dados.nome)return err('Preencha o nome de guerra e o nome completo.');
+const btn=form.querySelector('button.btn-pri');const rot=btn.textContent;btn.disabled=true;btn.textContent='Criando…';
 bootstrapping=true;let cred=null;
 try{
 cred=await createUserWithEmailAndPassword(auth,email,String(fd.get('senha')));
-const base={...dados,tipo,email,criadoEm:nowISO(),lgpd:setup?nowISO():(fd.get('lgpd')?nowISO():null)};
+const base={...dados,tipo,email,perfil,criadoEm:nowISO(),lgpd:nowISO(),romaneio:{}};
 if(setup){
 const b=writeBatch(db);
-b.set(doc(db,'users',cred.user.uid),{...base,perfil:'almox',ativo:true,pendente:false});
+b.set(doc(db,'users',cred.user.uid),{...base,ativo:true,pendente:false});
 b.set(doc(db,'config','setup'),{em:nowISO(),por:cred.user.uid,seed:!!fd.get('seed'),seeded:false});
 await b.commit();
 }else{
-await setDoc(doc(db,'users',cred.user.uid),{...base,perfil:'cadete',ativo:false,pendente:true});
+await setDoc(doc(db,'users',cred.user.uid),{...base,ativo:false,pendente:true});
 }
 try{await sendEmailVerification(cred.user);}catch(e){console.warn(e);}
 bootstrapping=false;await aoMudarLogin(auth.currentUser);
 }catch(e){
 bootstrapping=false;console.error(e);
 if(cred){try{await cred.user.delete();}catch(x){}}
-err(erroFirebase(e));btn.disabled=false;btn.textContent=setup?'Criar conta do almoxarifado':'Criar conta';
+err(erroFirebase(e));btn.disabled=false;btn.textContent=rot;
 }
 }
 
@@ -270,8 +287,8 @@ function vApp(){
 const u=me();const v=ui.view||'ini';
 const n=acoesPendentes();
 let corpo=v==='sol'?vSolicitar():v==='caut'?vMinhas():v==='pf'?vPerfil():vInicio();
-const nav=[['ini','Início',IC.ini,n],['sol','Solicitar',IC.sol,0],['caut','Cautelas',IC.rs,0],['pf','Perfil',IC.pf,0]];
-return `<header class="m-top"><div class="wrap m-top-in"><img class="m-brasao" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>${esc(nomeU(u))} · ${esc(turmaU(u))}</p></div></div></header>
+const nav=[['ini','Início',IC.ini,n],['sol','Solicitar',IC.sol,0],['caut','Cautelas',IC.rs,0],['pf','Meus dados',IC.pf,dadosCompletos(u)?0:1]];
+return `<header class="m-top"><div class="wrap m-top-in"><img class="m-brasao" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>${esc(nomeU(u))}${turmaU(u)?' · '+esc(turmaU(u)):''}</p></div></div></header>
 <main class="m-main">${corpo}</main>
 ${v==='sol'&&ui.cart.length?`<div class="cartbar"><div class="in"><span><b>${ui.cart.reduce((a,x)=>a+x.qtd,0)}</b> peça(s) no pedido</span><button class="btn" data-act="abrirPedido">Revisar e enviar</button></div></div>`:''}
 <nav class="bnav"><div class="in">${nav.map(([k,l,ic,b])=>`<button data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}>${ic}<span>${l}${b?`<span class="dot-n">${b}</span>`:''}</span></button>`).join('')}</div></nav>`;
@@ -311,11 +328,13 @@ h+=linhas.length?`<div class="card"><ul class="itens">${linhas.map(l=>`<li><b>${
 :`<div class="empty">Nenhum material cautelado em seu nome.<br><button class="btn btn-pri" style="margin-top:.7rem" data-act="go" data-v="sol">Solicitar material</button></div>`;
 if(andamento.length)h+=`<div class="sec-h"><h2>Pedidos em andamento</h2></div>`+andamento.map(c=>cardCautela(c)).join('');
 if(ativas.length)h+=`<div class="sec-h"><h2>Cautelas ativas</h2></div>`+ativas.map(c=>cardCautela(c)).join('');
-if(!u.romaneio||!Object.keys(u.romaneio).length)h=`<div class="aviso" style="margin-bottom:.8rem">Preencha seu <b>romaneio</b> no Perfil para o sistema sugerir os tamanhos certos. <button class="link" data-act="go" data-v="pf">Preencher agora</button></div>`+h;
+if(!dadosCompletos(u))h=boxCompletar()+h;
 return h;
 }
+const boxCompletar=()=>`<div class="pend-box"><p><b>Complete seus dados e o romaneio</b></p><p class="small">Antes do primeiro pedido, informe RG, ${me().tipo==='oficial'?'OPM':'ano e pelotão'} e suas medidas. O sistema usa o romaneio para separar o tamanho certo de cada peça.</p><button class="btn btn-pri" style="margin-top:.5rem" data-act="go" data-v="pf">Preencher meus dados</button></div>`;
 function vSolicitar(){
 const u=me();
+if(!dadosCompletos(u))return boxCompletar();
 const cats=D.cats.filter(c=>D.itens.some(i=>i.catId===c.id&&i.ativo!==false));
 if(!ui.cat||!cats.some(c=>c.id===ui.cat))ui.cat=cats[0]?cats[0].id:null;
 let h=`<div class="filterbar"><div class="chips">${cats.map(c=>`<button class="chip" data-act="cat" data-id="${c.id}" aria-pressed="${ui.cat===c.id}">${esc(c.nome)}</button>`).join('')}</div></div>`;
@@ -375,11 +394,14 @@ return `<div class="sec-h"><h2>Minhas cautelas</h2><span class="muted small">${l
 }
 function vPerfil(){
 const u=me();const bio=temBioAqui();
-return `<div class="sec-h"><h2>Perfil</h2></div>
-<div class="card stack"><dl class="dados-mil"><dt>Nome</dt><dd>${esc(u.nome)}</dd><dt>Guerra</dt><dd>${esc(nomeU(u))}</dd><dt>RG</dt><dd>${esc(u.rg||'—')}</dd><dt>E-mail</dt><dd>${esc(u.email)}</dd>
-<dt>${u.tipo==='oficial'?'OPM':'Turma'}</dt><dd>${esc(u.tipo==='oficial'?u.opm:[u.turma,turmaU(u)].filter(Boolean).join(' · '))}</dd></dl>
-<p class="small muted">Para corrigir nome, RG ou e-mail, procure o almoxarifado.</p></div>
-<form id="f-perfil" class="card stack" style="margin-top:.8rem">${camposDados(u,{ro:true})}<p class="erro" id="pf-erro"></p><button class="btn btn-pri btn-block">Salvar telefone, pelotão e romaneio</button></form>
+return `<div class="sec-h"><h2>Meus dados</h2></div>
+${dadosCompletos(u)?'':`<div class="pend-box"><p class="small">Preencha os campos abaixo e o romaneio para poder solicitar material.</p></div>`}
+<div class="card stack"><dl class="dados-mil"><dt>Militar</dt><dd>${esc(nomeU(u))}</dd><dt>Nome</dt><dd>${esc(u.nome)}</dd><dt>E-mail</dt><dd>${esc(u.email)}</dd></dl>
+<p class="small muted">Para corrigir nome, graduação ou e-mail, procure o almoxarifado.</p></div>
+<form id="f-perfil" class="stack" style="margin-top:.8rem">
+<div class="card stack"><h3>Dados complementares</h3>${camposComp(u)}</div>
+<div class="card stack"><h3>Romaneio</h3><p class="small muted">Suas medidas. Use o número ou o tamanho que está na etiqueta da peça que você veste (ex.: 41, M, 56).</p>${camposRom(u)}</div>
+<p class="erro" id="pf-erro"></p><button class="btn btn-pri btn-block">Salvar meus dados</button></form>
 <div class="card stack" style="margin-top:.8rem"><h3>Assinatura</h3>
 ${bio?'<p class="pill ok">Digital / Face ID ativados neste aparelho</p>':bioOk?`<p class="small">Ative para assinar as cautelas com digital, Face ID ou a senha do celular.</p><button class="btn btn-pri" data-act="ativarBio">Ativar digital / Face ID neste aparelho</button>`:'<p class="small muted">Este aparelho não oferece digital/Face ID para sites. Assine com a senha.</p>'}
 <button class="btn" data-act="senha">Trocar minha senha</button></div>
@@ -388,9 +410,10 @@ ${bio?'<p class="pill ok">Digital / Face ID ativados neste aparelho</p>':bioOk?`
 }
 async function salvarPerfil(fd){
 const u=me();const d=lerDados(fd,u.tipo);
-const up={telefone:d.telefone,romaneio:d.romaneio,atualizadoEm:nowISO()};
-if(u.tipo!=='oficial'){up.pelotao=d.pelotao;up.ano=d.ano;up.turma=d.turma;}
-try{await updateDoc(doc(db,'users',u.id),up);toast('Dados salvos.');}catch(e){$('#pf-erro').textContent=erroFirebase(e);}
+const up={rg:d.rg||'',telefone:d.telefone||'',romaneio:d.romaneio||{},atualizadoEm:nowISO()};
+if(u.tipo==='oficial')up.opm=d.opm||'';else{up.pelotao=d.pelotao||'';up.ano=d.ano||'';up.turma=d.turma||'';}
+try{await updateDoc(doc(db,'users',u.id),up);toast(dadosCompletos({...u,...up})?'Dados salvos.':'Dados salvos. Faltam informações para liberar os pedidos.');window.scrollTo(0,0);}
+catch(e){$('#pf-erro').textContent=erroFirebase(e);}
 }
 function trocarSenha(){
 openModal('Trocar senha',`<form id="f-senha" class="stack"><label class="f"><span>Senha atual</span><input class="i" type="password" name="a" required autocomplete="current-password"></label>
@@ -907,12 +930,12 @@ let l=D.users.filter(u=>!u.pendente&&(!q||norm(nomeU(u)+' '+u.nome+' '+turmaU(u)
 l.sort((a,b)=>(b.ativo-a.ativo)||nomeU(a).localeCompare(nomeU(b),'pt-BR'));
 const emUso=id=>ativasA().filter(c=>c.userId===id).reduce((a,c)=>a+(c.itens||[]).reduce((b,x)=>b+pend(x),0),0);
 let h=`<div class="a-head"><div><h1>Militares</h1><p>${D.users.filter(u=>u.ativo).length} com acesso liberado</p></div><button class="btn" data-act="csvMil">Exportar romaneios (CSV)</button></div>`;
-if(pc.length)h+=`<div class="sec-h"><h2>Aguardando liberação</h2></div>`+pc.map(u=>`<div class="card" style="margin-bottom:.6rem"><div class="card-t"><div><p style="font-weight:600">${esc(nomeU(u))} <span class="tag">${u.tipo==='oficial'?'Oficial':'Cadete'}</span></p>
-<p class="small muted">${esc(u.nome)} · RG ${esc(u.rg||'—')} · ${esc(turmaU(u))} · ${esc(u.email)}</p><p class="small muted">Cadastro em ${fmt(u.criadoEm)}</p></div>
+if(pc.length)h+=`<div class="sec-h"><h2>Aguardando liberação</h2></div>`+pc.map(u=>`<div class="card" style="margin-bottom:.6rem"><div class="card-t"><div><p style="font-weight:600">${esc(nomeU(u))} <span class="tag">${u.perfil==='almox'?'Conta do almoxarifado':u.tipo==='oficial'?'Oficial':'Cadete'}</span></p>
+<p class="small muted">${esc(u.nome)} · ${esc(u.email)}</p><p class="small muted">Cadastro em ${fmt(u.criadoEm)}</p></div>
 <div class="row"><button class="btn btn-sm btn-warn" data-act="negarCad" data-id="${u.id}">Recusar</button><button class="btn btn-sm btn-pri" data-act="liberar" data-id="${u.id}">Liberar</button></div></div></div>`).join('');
 h+=`<div class="filters" style="margin-top:1rem"><input class="i" data-inp="mq" placeholder="Buscar por nome, pelotão, RG ou e-mail" value="${esc(ui.mq)}"></div>
 <div class="tbl-wrap"><table><thead><tr><th>Militar</th><th>Turma / OPM</th><th>Peças em uso</th><th>Situação</th></tr></thead><tbody>
-${l.map(u=>`<tr class="hov" data-act="verMil" data-id="${u.id}"><td>${esc(nomeU(u))}<br><span class="small muted">${esc(u.nome)}</span></td><td>${esc(turmaU(u))}</td><td>${emUso(u.id)||'—'}</td>
+${l.map(u=>`<tr class="hov" data-act="verMil" data-id="${u.id}"><td>${esc(nomeU(u))}<br><span class="small muted">${esc(u.nome)}</span></td><td>${esc(turmaU(u))||'<span class="muted">dados incompletos</span>'}</td><td>${emUso(u.id)||'—'}</td>
 <td>${u.perfil==='almox'?'<span class="tag">Almoxarifado</span> ':''}${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Sem acesso</span>'}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Ninguém encontrado.</td></tr>'}
 </tbody></table></div>`;
 return h;
@@ -932,13 +955,13 @@ ${id!==sess.userId?`<button class="btn" data-act="perfilMil" data-id="${id}">${u
 }
 function editMil(id){
 const u=user(id);
-openModal('Editar – '+esc(nomeU(u)),`<form id="f-editmil" data-id="${id}" class="stack">${camposDados(u,{})}<p class="erro" id="em-erro"></p><button class="btn btn-pri btn-block">Salvar</button></form>`);
+openModal('Editar – '+esc(nomeU(u)),`<form id="f-editmil" data-id="${id}" class="stack">${camposDados(u)}<p class="erro" id="em-erro"></p><button class="btn btn-pri btn-block">Salvar</button></form>`);
 }
 async function salvarMil(form,fd){
 const u=user(form.dataset.id);const d=lerDados(fd,u.tipo);
 try{await updateDoc(doc(db,'users',u.id),{...d,atualizadoEm:nowISO()});closeModal();toast('Dados salvos.');}catch(e){$('#em-erro').textContent=erroFirebase(e);}
 }
-async function liberar(id){await updateDoc(doc(db,'users',id),{ativo:true,pendente:false,liberadoPor:sess.userId,liberadoEm:nowISO()});toast('Acesso liberado.');}
+async function liberar(id){const u=user(id);if(u.perfil==='almox'&&!confirm(`${nomeU(u)} pediu conta do ALMOXARIFADO: vai poder separar, entregar, receber devoluções e mexer no estoque. Liberar?`))return;await updateDoc(doc(db,'users',id),{ativo:true,pendente:false,liberadoPor:sess.userId,liberadoEm:nowISO()});toast('Acesso liberado.');}
 async function negarCad(id){if(!confirm('Recusar este cadastro?'))return;await updateDoc(doc(db,'users',id),{ativo:false,pendente:false,recusadoPor:sess.userId,recusadoEm:nowISO()});toast('Cadastro recusado.');}
 async function ativoMil(id){const u=user(id);if(u.ativo&&!confirm(`Bloquear o acesso de ${nomeU(u)}? O material em nome dele continua registrado.`))return;
 await updateDoc(doc(db,'users',id),{ativo:!u.ativo,pendente:false});closeModal();toast(u.ativo?'Acesso bloqueado.':'Acesso liberado.');}
@@ -1055,7 +1078,8 @@ fechar:closeModal,
 recarregar:()=>location.reload(),
 sair:async()=>{closeModal();ui.view=null;ui.cart=[];await signOut(auth);},
 tema:el=>{temaAtual=el.dataset.tema;try{localStorage.setItem('almox.tema',temaAtual);}catch(e){}aplicarTema(temaAtual);$$('.tema-sel button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tema===temaAtual));},
-irCadastro:()=>{loginMsg='';fase='cadastro';render();},
+irCadastro:el=>{loginMsg='';ui.cadPerfil=el.dataset.p||'cadete';fase='cadastro';render();},
+tela:el=>{ui.tela=el.dataset.t;loginMsg='';fase='login';render();},
 irLogin:()=>{fase='login';render();},
 cadTipo:el=>{ui.cadTipo=el.dataset.t;render();},
 esqueci:()=>openModal('Esqueci minha senha',`<form id="f-esq" class="stack"><label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off"></label>
@@ -1226,6 +1250,8 @@ aguardandoUnsub=onSnapshot(doc(db,'users',u.uid),d=>{const y=d.data();if(y&&y.at
 else if(y&&!y.pendente&&!y.ativo){loginMsg='Seu cadastro não foi liberado. Procure o almoxarifado.';signOut(auth);}},()=>{});
 return;}
 if(!x.ativo){loginMsg='Seu acesso está bloqueado. Procure o almoxarifado.';await signOut(auth);return;}
+if(ui.telaLogin==='almox'&&x.perfil!=='almox'){ui.telaLogin=null;loginMsg='Esta conta não é do almoxarifado. Use o acesso dos cadetes.';await signOut(auth);return;}
+ui.telaLogin=null;
 sess={userId:u.uid};D=D0();D.eu={id:u.uid,...x};D.users=[D.eu];ui.view=null;
 escutar(x.perfil);
 }catch(e){console.error(e);erroMsg=erroFirebase(e);fase='erro';render();}

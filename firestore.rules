@@ -1,5 +1,5 @@
 rules_version = '2';
-// Regras de segurança do Almox EsFO (v1.0)
+// Regras de segurança do Almox EsFO (v1.1)
 // Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -43,17 +43,17 @@ service cloud.firestore {
     // ---------- Militares (cadetes, oficiais e almoxarifes) ----------
     match /users/{id} {
       allow read: if logado() && (id == uid() || almox());
-      // Autocadastro: sempre pendente e com perfil de cadete; o primeiro almoxarife nasce junto com config/setup.
+      // Autocadastro: sempre pendente (cadete, oficial ou pedido de conta do almoxarifado); o primeiro almoxarife nasce junto com config/setup.
       allow create: if emailPM() && id == uid()
         && request.resource.data.email == request.auth.token.email.lower()
         && (
-          (request.resource.data.perfil == 'cadete' && request.resource.data.ativo == false && request.resource.data.pendente == true)
+          (request.resource.data.perfil in ['cadete', 'almox'] && request.resource.data.ativo == false && request.resource.data.pendente == true)
           || (request.resource.data.perfil == 'almox' && request.resource.data.ativo == true
               && !exists(/databases/$(database)/documents/config/setup)
               && existsAfter(/databases/$(database)/documents/config/setup))
         );
       allow update: if almox()
-        || (logado() && id == uid() && muda(['telefone','romaneio','passkeys','pelotao','turma','ano','atualizadoEm']));
+        || (logado() && id == uid() && muda(['rg','opm','telefone','romaneio','passkeys','pelotao','turma','ano','atualizadoEm']));
       allow delete: if almox();
     }
 
