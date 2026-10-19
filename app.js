@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.1.0';
+const VERSAO='1.2.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -20,7 +20,7 @@ let erroMsg='',loginMsg='';
 const D0=()=>({users:[],cats:[],itens:[],cautelas:[],trfIn:[],dir:[],dirDoc:null,setup:null,eu:null});
 let D=D0();
 let sess=null,bootstrapping=false,unsubs=[],loaded={},aguardandoUnsub=null;
-const ui={view:null,cart:[],cat:null,q:'',hq:'',mq:'',matQ:'',histTudo:false,cadTipo:'cadete'};
+const ui={modo:(()=>{try{return localStorage.getItem('almox.modo')||'almox';}catch(e){return 'almox';}})(),view:null,cart:[],cat:null,q:'',hq:'',mq:'',matQ:'',histTudo:false,cadTipo:'cadete'};
 const baldes={ativas:[],recentes:[],tudo:[],minhas:[]};
 const HIST_DIAS=90;
 
@@ -289,7 +289,7 @@ const n=acoesPendentes();
 let corpo=v==='sol'?vSolicitar():v==='caut'?vMinhas():v==='pf'?vPerfil():vInicio();
 const nav=[['ini','Início',IC.ini,n],['sol','Solicitar',IC.sol,0],['caut','Cautelas',IC.rs,0],['pf','Meus dados',IC.pf,dadosCompletos(u)?0:1]];
 return `<header class="m-top"><div class="wrap m-top-in"><img class="m-brasao" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>${esc(nomeU(u))}${turmaU(u)?' · '+esc(turmaU(u)):''}</p></div></div></header>
-<main class="m-main">${corpo}</main>
+<main class="m-main">${u.perfil==='almox'?'<div class="aviso" style="margin-bottom:.8rem">Você está usando o app como cadete. <button class="link" data-act="modo" data-m="almox">Voltar ao painel do almoxarifado</button></div>':''}${corpo}</main>
 ${v==='sol'&&ui.cart.length?`<div class="cartbar"><div class="in"><span><b>${ui.cart.reduce((a,x)=>a+x.qtd,0)}</b> peça(s) no pedido</span><button class="btn" data-act="abrirPedido">Revisar e enviar</button></div></div>`:''}
 <nav class="bnav"><div class="in">${nav.map(([k,l,ic,b])=>`<button data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}>${ic}<span>${l}${b?`<span class="dot-n">${b}</span>`:''}</span></button>`).join('')}</div></nav>`;
 }
@@ -406,6 +406,7 @@ ${dadosCompletos(u)?'':`<div class="pend-box"><p class="small">Preencha os campo
 ${bio?'<p class="pill ok">Digital / Face ID ativados neste aparelho</p>':bioOk?`<p class="small">Ative para assinar as cautelas com digital, Face ID ou a senha do celular.</p><button class="btn btn-pri" data-act="ativarBio">Ativar digital / Face ID neste aparelho</button>`:'<p class="small muted">Este aparelho não oferece digital/Face ID para sites. Assine com a senha.</p>'}
 <button class="btn" data-act="senha">Trocar minha senha</button></div>
 <div class="card stack" style="margin-top:.8rem"><h3>Aparência</h3>${seletorTema()}</div>
+${u.perfil==='almox'?'<button class="btn btn-pri btn-block" style="margin-top:1rem" data-act="modo" data-m="almox">Voltar ao painel do almoxarifado</button>':''}
 <button class="btn btn-warn btn-block" style="margin-top:1rem" data-act="sair">Sair</button><p class="versao-app">${NOME} v${VERSAO}</p>`;
 }
 async function salvarPerfil(fd){
@@ -597,6 +598,7 @@ const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
 ${nav.map(([k,l,b])=>`<button class="nav-b" data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}><span>${l}</span>${b?`<span class="badge${k==='uso'?' red':''}">${b}</span>`:''}</button>`).join('')}
 <button class="nav-b" data-act="balcao"><span>+ Cautela no balcão</span></button>
+<button class="nav-b" data-act="modo" data-m="cadete"><span>Usar como cadete</span></button>
 <div class="foot"><div class="who">${esc(nomeU(u))}</div>${seletorTema()}<button class="nav-b" data-act="senha">Trocar senha</button><button class="nav-b" data-act="sair">Sair</button></div></aside>
 <main class="a-main">${corpo}</main></div>`;
 }
@@ -1073,6 +1075,7 @@ catch(e){console.error(e);semeando=false;}
 
 /* ============ Eventos ============ */
 const acts={
+modo:el=>{ui.modo=el.dataset.m;ui.view=null;try{localStorage.setItem('almox.modo',ui.modo);}catch(e){}closeModal();render();window.scrollTo(0,0);},
 go:el=>{ui.view=el.dataset.v;closeModal();render();window.scrollTo(0,0);},
 fechar:closeModal,
 recarregar:()=>location.reload(),
@@ -1227,7 +1230,7 @@ else if(nome==='cats')D.cats=ordenarCats(arr);
 else if(nome==='itens'){D.itens=arr;ordenarItens(D.itens);}
 else if(nome==='trfIn'){if(!prim)snap.docChanges().forEach(ch=>{if(ch.type==='added'){const c=ch.doc.data();avisar('Transferência para você',`${nomeM(c.userId)} quer transferir material. Abra o Início para aceitar.`);}});D.trfIn=arr;}
 else{if(prim)snap.docs.forEach(d=>prevSt.set(d.id,d.data().status+'|'+(d.data().assinatura?1:0)));else avisosCautelas(snap,adm);
-baldes[nome]=arr;D.cautelas=juntarCautelas();if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
+baldes[nome]=arr;D.cautelas=juntarCautelas();if(adm)D.trfIn=D.cautelas.filter(c=>c.transferPara===uid&&c.status==='cautelada');if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
 depois(prim);
 },err=>{
 if(nome==='trfIn'||nome==='recentes'){console.warn(nome,err);baldes[nome]=[];pronto();return;}
@@ -1269,7 +1272,7 @@ else if(fase==='cadastro')html=vCadastro();
 else if(fase==='verificar')html=vVerificar();
 else if(fase==='aguardando')html=vAguardando();
 else if(fase==='login'||!sess||!me())html=fase==='app'?vCarregando():vLogin();
-else html=ehAlmox()?vAdmin():vApp();
+else html=ehAlmox()&&ui.modo!=='cadete'?vAdmin():vApp();
 $('#app').innerHTML=html;
 document.title=sess&&fase==='app'?`${NOME}${ehAlmox()&&solicitadas().length?' ('+solicitadas().length+')':''}`:`${NOME} – Cautela de Materiais`;
 if(keep){const el=document.querySelector(`[data-inp="${keep}"]`);if(el){el.focus();try{el.setSelectionRange(pos,pos);}catch(e){}}}
