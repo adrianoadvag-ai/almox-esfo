@@ -1,4 +1,164 @@
 rules_version = '2';
+// Regras de segurança do Almox EsFO (v1.6.0)
+// Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function emailPM() {
+      return logado() && request.auth.token.email is string
+        && request.auth.token.email.lower().matches('.*@pm[.]pr[.]gov[.]br$');
+    }
+    // Conta de gestor por usuário (ex.: romeiro@almox.esfo), como a da Furrielação no SICAM: não recebe e-mail de confirmação
+    function emailInterno() {
+      return logado() && request.auth.token.email is string && request.auth.token.email.lower().matches('.*@almox[.]esfo$');
+    }
+    function verificado() { return emailPM() && request.auth.token.email_verified == true; }
+    function eu() { return get(/databases/$(database)/documents/users/$(uid())).data; }
+    function cadastrado() { return exists(/databases/$(database)/documents/users/$(uid())); }
+    function ativo() {
+      return cadastrado() && eu().ativo == true && (verificado() || (emailInterno() && eu().perfil == 'almox'));
+    }
+    function almox() { return ativo() && eu().perfil == 'almox'; }
+    // Gestor principal: quem fez a configuração inicial ou quem recebeu a marca "principal"
+    function principal() {
+      return almox() && (eu().get('principal', false) == true
+        || get(/databases/$(database)/documents/config/setup).data.por == uid());
+    }
+    // O gestor não atende as cautelas da própria conta de cadete (vínculo)
+    function alheia(dono) { return dono != eu().get('vinculo', '#'); }
+    function muda(campos) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(campos); }
+    function mexeEm(campos) { return request.resource.data.diff(resource.data).affectedKeys().hasAny(campos); }
+
+    // ---------- Configuração inicial (cria o primeiro gestor) ----------
+    match /config/setup {
+      allow read: if true;
+      allow create: if (emailPM() || emailInterno()) && !exists(/databases/$(database)/documents/config/setup)
+                    && existsAfter(/databases/$(database)/documents/users/$(uid()));
+      allow update: if almox();
+      allow delete: if false;
+    }
+
+    // ---------- Numeração das cautelas ----------
+    match /config/contador {
+      allow read: if ativo();
+      allow create: if ativo() && request.resource.data.n == 1;
+      allow update: if ativo() && request.resource.data.n == resource.data.n + 1 && muda(['n']);
+      allow delete: if false;
+    }
+
+    // ---------- Lista resumida de militares (para escolher o destino de uma transferência) ----------
+    match /config/diretorio {
+      allow read: if ativo();
+      allow write: if almox();
+    }
+
+    // ---------- Convites para conta de gestor (código de uso único, válido por 24 h) ----------
+    match /convites/{cod} {
+      // quem tem o código consegue conferir o convite antes de criar a conta
+      allow get: if true;
+      allow list: if almox();
+      allow create: if principal() && request.resource.data.usado == false
+        && request.resource.data.criadoPor == uid() && cod.size() == 8;
+      allow update: if principal()
+        || (emailInterno() && resource.data.usado == false && resource.data.get('cancelado', false) == false
+            && request.time.toMillis() < resource.data.expiraMs
+            && request.resource.data.usado == true && request.resource.data.usadoPor == uid()
+            && muda(['usado', 'usadoPor', 'usadoEm', 'usuario'])
+            && existsAfter(/databases/$(database)/documents/users/$(uid())));
+      allow delete: if principal();
+    }
+
+    // ---------- Militares (cadetes, oficiais e gestores) ----------
+    match /users/{id} {
+      allow read: if logado() && (id == uid() || almox());
+      // Cadastro feito pelo gestor (oficial de fora da EsFO)
+      allow create: if almox() && request.resource.data.perfil != 'almox';
+      // Autocadastro de cadete/oficial com o e-mail institucional: sempre pendente
+      allow create: if emailPM() && id == uid()
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.perfil == 'cadete' && request.resource.data.ativo == false && request.resource.data.pendente == true;
+      // Configuração inicial: primeiro gestor (usuário sem e-mail ou e-mail institucional)
+      allow create: if (emailPM() || emailInterno()) && id == uid()
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.perfil == 'almox' && request.resource.data.ativo == true
+        && !exists(/databases/$(database)/documents/config/setup)
+        && existsAfter(/databases/$(database)/documents/config/setup);
+      // Conta de gestor criada com código de convite válido; o vínculo vem do convite
+      allow create: if emailInterno() && id == uid()
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.perfil == 'almox' && request.resource.data.ativo == true && request.resource.data.pendente == false
+        && request.resource.data.get('principal', false) == false
+        && exists(/databases/$(database)/documents/convites/$(request.resource.data.convite))
+        && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.usado == false
+        && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.get('cancelado', false) == false
+        && request.time.toMillis() < get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.expiraMs
+        && request.resource.data.vinculo == get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.cadeteId
+        && getAfter(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.usadoPor == uid();
+
+      // Gestor principal: tudo. Demais gestores: não mexem em perfil, vínculo, marca de principal nem em outras contas de gestor.
+      allow update: if principal()
+        || (almox() && id != uid() && resource.data.perfil != 'almox' && !mexeEm(['perfil', 'vinculo', 'principal']))
+        || (logado() && id == uid() && muda(['rg','cpf','opm','telefone','emailPessoal','romaneio','passkeys','pelotao','cia','curso','subturma','turma','ano','privacidade','atualizadoEm']));
+      allow delete: if principal();
+    }
+
+    // ---------- Catálogo e estoque ----------
+    match /categorias/{id} {
+      allow read: if ativo();
+      allow write: if almox();
+    }
+    match /itens/{id} {
+      allow read: if ativo();
+      allow write: if almox();
+      // Reserva das peças pedidas pelo app (o painel do almoxarifado confere e corrige o total)
+      allow update: if ativo() && muda(['reservado']) && request.resource.data.reservado is map;
+    }
+    match /movimentos/{id} {
+      allow read, create: if almox();
+      allow update, delete: if false;
+    }
+
+    // ---------- Cautelas ----------
+    match /cautelas/{id} {
+      allow read: if almox()
+        || (ativo() && (resource.data.userId == uid() || resource.data.transferPara == uid()));
+
+      allow create: if (almox() && alheia(request.resource.data.userId))
+        // Pedido feito pelo app
+        || (ativo() && request.resource.data.userId == uid()
+            && request.resource.data.status == 'solicitada' && request.resource.data.origem == 'app')
+        // Recebimento de uma transferência que foi oferecida a este militar
+        || (ativo() && request.resource.data.userId == uid()
+            && request.resource.data.status == 'cautelada' && request.resource.data.origem == 'transferencia'
+            && get(/databases/$(database)/documents/cautelas/$(request.resource.data.deCautela)).data.transferPara == uid());
+
+      allow update: if (almox() && alheia(resource.data.userId))
+        || (ativo() && resource.data.userId == uid() && (
+              // cancelar o próprio pedido ainda não separado
+              (resource.data.status == 'solicitada' && request.resource.data.status == 'cancelada' && muda(['status','log']))
+              // assinar o recebimento do material separado
+              || (resource.data.status == 'separada' && resource.data.assinatura == null && muda(['assinatura','log']))
+              // oferecer ou desistir de uma transferência (sem devolução em andamento)
+              || (resource.data.status == 'cautelada' && resource.data.get('devSol', null) == null
+                  && resource.data.get('devPend', null) == null && muda(['transferPara','transfer','log']))
+              // pedir (ou cancelar) a devolução pelo app, assinada pelo militar
+              || (resource.data.status == 'cautelada' && resource.data.get('devPend', null) == null
+                  && resource.data.get('transferPara', null) == null && muda(['devSol','log']))
+              // assinar, no próprio celular, a devolução conferida pelo almoxarifado
+              || (resource.data.status == 'cautelada' && resource.data.get('devPend', null) != null
+                  && resource.data.get('devAss', null) == null && request.resource.data.devAss.por == uid()
+                  && muda(['devAss','log']))
+           ))
+        // destinatário aceita ou recusa a transferência
+        || (ativo() && resource.data.transferPara == uid() && muda(['transferPara','transfer','itens','status','log']));
+
+      allow delete: if false;
+    }
+  }
+}
+rules_version = '2';
 // Regras de segurança do Almox EsFO (v1.5.3)
 // Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
 service cloud.firestore {
