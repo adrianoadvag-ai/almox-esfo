@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.2';
+const VERSAO='1.5.3';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -351,7 +351,7 @@ const minhas=()=>D.cautelas.filter(c=>c.userId===sess.userId);
 function acoesPendentes(){
 const assinar=minhas().filter(c=>c.status==='separada'&&!c.assinatura).length;
 const trf=D.trfIn.filter(c=>c.transferPara===sess.userId&&c.transfer).length;
-return assinar+trf;
+return assinar+trf+minhas().filter(devAguardaMilitar).length;
 }
 function cardCautela(c,admin){
 const u=user(c.userId);
@@ -371,6 +371,8 @@ assinar.forEach(c=>{h+=`<div class="pend-box"><p><b>Material separado para você
 aguard.forEach(c=>{h+=`<div class="pend-box"><p><b>${nr(c.num)} assinada.</b> Aguarde o almoxarifado confirmar a entrega.</p></div>`;});
 trf.forEach(c=>{h+=`<div class="pend-box"><p><b>Transferência para você</b> – ${esc(nomeM(c.userId))} quer transferir:</p><ul class="itens">${(c.transfer.itens||[]).map(x=>{const l=c.itens[x.i]||{};return `<li><b>${x.qtd}×</b><span>${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}</span></li>`;}).join('')}</ul>
 <div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="aceitarTrf" data-id="${c.id}">Aceitar e assinar</button><button class="btn btn-warn" data-act="recusarTrf" data-id="${c.id}">Recusar</button></div></div>`;});
+minhas().filter(devAguardaMilitar).forEach(c=>{h+=`<div class="pend-box"><p><b>Devolução para assinar – ${nr(c.num)}</b></p><p>${esc(c.devPend.txt)}</p>${c.devPend.obs?`<p class="small">Obs.: ${esc(c.devPend.obs)}</p>`:''}<p class="small muted">Confira e assine a devolução do material ao almoxarifado.</p><div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="assinarDev" data-id="${c.id}">Assinar devolução</button><button class="btn" data-act="ver" data-id="${c.id}">Detalhes</button></div></div>`;});
+minhas().filter(devAguardaAlmox).forEach(c=>{h+=`<div class="pend-box"><p><b>Devolução ${nr(c.num)} assinada.</b> Aguarde o almoxarifado concluir.</p></div>`;});
 atras.forEach(c=>{h+=`<div class="pend-box red"><p><b>${nr(c.num)} em atraso</b> – o prazo de devolução era ${fmtD(c.prazo)}. Procure o almoxarifado.</p></div>`;});
 const ativas=minhas().filter(c=>c.status==='cautelada');
 const andamento=minhas().filter(c=>c.status==='solicitada'||c.status==='separada');
@@ -503,11 +505,14 @@ if(adm){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="recusar" data-id="${c.id}">Recusar</button><button class="btn btn-pri" data-act="separar" data-id="${c.id}">Separar material</button>`;
 if(c.status==='separada'){acoes+=`<button class="btn btn-warn" data-act="cancelarSep" data-id="${c.id}">Cancelar e devolver ao estoque</button>`;
 acoes+=a?`<button class="btn btn-pri" data-act="entregar" data-id="${c.id}">Assinar e entregar</button>`:`<button class="btn btn-pri" data-act="assBalcao" data-id="${c.id}">Assinar no balcão (senha do militar)</button>`;}
-if(c.status==='cautelada'&&pendentes(c).length)acoes+=`<button class="btn" data-act="prazo" data-id="${c.id}">Prazo</button><button class="btn btn-pri" data-act="devolver" data-id="${c.id}">Registrar devolução</button>`;
+if(c.status==='cautelada'&&c.devPend)acoes+=`<button class="btn btn-warn" data-act="cancelarDev" data-id="${c.id}">Cancelar devolução</button>`+(c.devAss?`<button class="btn btn-pri" data-act="assDevAlmox" data-id="${c.id}">Assinar e concluir devolução</button>`:`<button class="btn" data-act="assDevBalcao" data-id="${c.id}">Militar assina aqui (senha)</button>`);
+else if(c.status==='cautelada'&&pendentes(c).length)acoes+=`<button class="btn" data-act="prazo" data-id="${c.id}">Prazo</button><button class="btn btn-pri" data-act="devolver" data-id="${c.id}">Registrar devolução</button>`;
 }else if(meu){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="cancelarPedido" data-id="${c.id}">Cancelar pedido</button>`;
 if(c.status==='separada'&&!a)acoes+=`<button class="btn btn-pri" data-act="assinar" data-id="${c.id}">Assinar recebimento</button>`;
-if(c.status==='cautelada'&&pendentes(c).length)acoes+=c.transferPara?`<button class="btn btn-warn" data-act="desistirTrf" data-id="${c.id}">Desistir da transferência</button>`:`<button class="btn btn-pri" data-act="transferir" data-id="${c.id}">Transferir para outro militar</button>`;
+if(devAguardaMilitar(c))acoes+=`<button class="btn btn-pri" data-act="assinarDev" data-id="${c.id}">Assinar devolução</button>`;
+else if(c.status==='cautelada'&&c.devPend){}
+else if(c.status==='cautelada'&&pendentes(c).length)acoes+=c.transferPara?`<button class="btn btn-warn" data-act="desistirTrf" data-id="${c.id}">Desistir da transferência</button>`:`<button class="btn btn-pri" data-act="transferir" data-id="${c.id}">Transferir para outro militar</button>`;
 }
 if(c.assinatura)acoes=`<button class="btn" data-act="termo" data-id="${c.id}">Termo de cautela (PDF)</button>`+acoes;
 openModal(`Cautela ${nr(c.num)}`,`<div class="ficha">${stamp(c,true)}<p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>
@@ -517,7 +522,8 @@ ${c.status!=='solicitada'?`<dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'se
 ${a?`<dt>Assinatura do militar</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>`:''}
 ${c.assinaturaAlmox?`<dt>Assinatura do almoxarifado</dt><dd>${esc(nomeM(c.assinaturaAlmox.por))}, ${fmt(c.assinaturaAlmox.em)}, ${esc(FORMA_ALM[c.assinaturaAlmox.metodo]||c.assinaturaAlmox.metodo)}</dd>`:''}
 ${c.obs?`<dt>Obs.</dt><dd>${esc(c.obs)}</dd>`:''}
-${c.transferPara?`<dt>Transferência</dt><dd>oferecida a ${esc(nomeM(c.transferPara))}, aguardando aceite</dd>`:''}</dl></div>
+${c.transferPara?`<dt>Transferência</dt><dd>oferecida a ${esc(nomeM(c.transferPara))}, aguardando aceite</dd>`:''}
+${c.devPend?`<dt>Devolução</dt><dd>${esc(c.devPend.txt)}${c.devPend.obs?' – '+esc(c.devPend.obs):''}<br><b>${c.devAss?'assinada pelo militar – aguardando o almoxarifado':'aguardando a assinatura do militar'}</b></dd>`:''}</dl></div>
 ${(c.ocorrencias||[]).length?`<div class="sec-h"><h3>Ocorrências na devolução</h3></div><ul class="feed">${c.ocorrencias.map(o=>`<li>${o.qtd}× ${esc(o.nome)}${tamTxt(o.tam)?' ('+esc(o.tam)+')':''} – <b class="c-stamp">${esc(o.estado)}</b>${o.obs?' – '+esc(o.obs):''}<time>${fmt(o.t)}</time></li>`).join('')}</ul>`:''}
 ${(c.devolucoes||[]).length?`<div class="sec-h"><h3>Devoluções assinadas (descautela)</h3></div><ul class="feed">${c.devolucoes.map(d=>`<li><b>${esc(d.material)}</b>${d.obs?'<br><span class="small">'+esc(d.obs)+'</span>':''}<br><span class="small">Assinada por ${esc(nomeM(d.militar.por))} (militar) e por ${esc(nomeM(d.almox.por))} (almoxarifado)</span><time>${fmt(d.em)}</time></li>`).join('')}</ul>`:''}
 <div class="sec-h"><h3>Histórico</h3></div><ul class="feed">${(c.log||[]).slice().reverse().map(x=>`<li><b>${esc(x.a)}</b> – ${esc(nomeM(x.por))}${x.obs?`<br><span class="small">${esc(x.obs)}</span>`:''}<time>${fmt(x.t)}</time></li>`).join('')}</ul>`,acoes);
@@ -662,7 +668,7 @@ const cauteladoDe=(itemId,tam)=>ativasA().reduce((a,c)=>a+(c.itens||[]).filter(l
 const separadoDe=(itemId,tam)=>separadas().reduce((a,c)=>a+(c.itens||[]).filter(l=>l.itemId===itemId&&l.tam===tam).reduce((b,l)=>b+l.qtd,0),0);
 function vAdmin(){
 const v=ui.view||'painel';const u=me();
-const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Cautelas',ativasA().filter(atrasada).length],
+const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Cautelas',ativasA().filter(c=>atrasada(c)||devAguardaAlmox(c)).length],
 ['material','Material',0],['militares','Militares',pendCad().length],['hist','Histórico',0],['rel','Relatórios',0]];
 const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial():v==='militares'?vMilitares():v==='hist'?vHist():v==='rel'?vRelatorios():vPainel();
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
@@ -680,6 +686,9 @@ let h=`<div class="a-head"><div><h1>Painel</h1><p>${new Date().toLocaleDateStrin
 <button class="kpi" data-act="go" data-v="uso"><strong>${pecas}</strong><span>Peças em uso (${uso.length} cautelas)</span></button>
 <button class="kpi ${atr.length?'alert':''}" data-act="go" data-v="uso"><strong>${atr.length}</strong><span>Cautelas em atraso</span></button></div>`;
 if(D.setup&&D.setup.seed&&!D.setup.seeded)h+=`<div class="pend-box"><p>Carregando o catálogo inicial…</p></div>`;
+const dvA=uso.filter(devAguardaAlmox),dvM=uso.filter(devAguardaMilitar);
+dvA.forEach(c=>{h+=`<div class="pend-box"><div class="row between"><p><b>Devolução assinada pelo militar – ${nr(c.num)}</b> · ${esc(nomeM(c.userId))}<br><span class="small">${esc(c.devPend.txt)}</span></p><button class="btn btn-sm btn-pri" data-act="assDevAlmox" data-id="${c.id}">Assinar e concluir</button></div></div>`;});
+if(dvM.length)h+=`<div class="pend-box"><p><b>${dvM.length} devolução(ões) aguardando a assinatura do militar:</b> ${dvM.map(c=>`<button class="link" data-act="ver" data-id="${c.id}">${nr(c.num)} – ${esc(nomeM(c.userId))}</button>`).join(', ')}</p></div>`;
 if(pc.length)h+=`<div class="pend-box"><div class="row between"><p><b>${pc.length} cadastro(s) aguardando liberação</b></p><button class="btn btn-sm" data-act="go" data-v="militares">Ver</button></div></div>`;
 const baixo=D.itens.filter(i=>i.ativo!==false&&(i.tamanhos||[]).some(t=>{const e=est(i,t);return e.total>0&&e.disp===0;}));
 if(baixo.length)h+=`<div class="pend-box red"><p><b>Tamanhos esgotados na prateleira:</b> ${baixo.map(i=>esc(i.nome)+' ('+(i.tamanhos||[]).filter(t=>{const e=est(i,t);return e.total>0&&e.disp===0;}).map(esc).join(', ')+')').join('; ')}</p></div>`;
@@ -703,7 +712,7 @@ return `<div class="a-head"><div><h1>Cautelas</h1><p>${l.length} cautela(s) ativ
 <div class="tbl-wrap"><table><thead><tr><th>Nº</th><th>Militar</th><th>Material</th><th>Desde</th><th>Devolver até</th></tr></thead><tbody>
 ${l.map(c=>`<tr class="hov" data-act="ver" data-id="${c.id}"><td class="mono">${nr(c.num)}</td><td>${esc(nomeM(c.userId))}<br><span class="small muted">${esc(turmaU(user(c.userId)))}</span></td>
 <td>${pendentes(c).map(x=>`${pend(x)}× ${esc(x.nome)}${tamTxt(x.tam)?' ('+esc(x.tam)+')':''}`).join('<br>')}</td><td>${fmtD(c.entregueEm||c.criadoEm)}</td>
-<td>${c.prazo?`<span class="${atrasada(c)?'c-stamp':''}">${fmtD(c.prazo)}${atrasada(c)?' – em atraso':''}</span>`:'<span class="muted">sem prazo</span>'}${c.transferPara?'<br><span class="tag">em transferência</span>':''}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">Nenhuma cautela ativa.</td></tr>'}
+<td>${c.prazo?`<span class="${atrasada(c)?'c-stamp':''}">${fmtD(c.prazo)}${atrasada(c)?' – em atraso':''}</span>`:'<span class="muted">sem prazo</span>'}${c.transferPara?'<br><span class="tag">em transferência</span>':''}${c.devPend?`<br><span class="tag">${c.devAss?'devolução: falta sua assinatura':'devolução: falta o militar assinar'}</span>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">Nenhuma cautela ativa.</td></tr>'}
 </tbody></table></div>`;
 }
 
@@ -860,6 +869,13 @@ const esperar=Date.now();const t=setInterval(()=>{if(C(novoId)||Date.now()-esper
 }
 
 /* ----- Devolução ----- */
+/* ----- Devolução (descautela), como no SICAM -----
+   1) O almoxarifado registra o que voltou e em que estado (nada muda no estoque ainda).
+   2) O militar assina no PRÓPRIO celular (senha ou digital/Face ID) – ou, se preferir, digita a senha no balcão.
+   3) O responsável pelo almoxarifado assina e a devolução é concluída (estoque, ocorrências e termo). */
+const devTxt=(c,mov)=>mov.map(x=>{const l=c.itens[x.i]||{};return `${x.q}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}${x.e!=='bom'?' – '+x.e:''}`;}).join(', ');
+const devAguardaMilitar=c=>c.status==='cautelada'&&!!c.devPend&&!c.devAss;
+const devAguardaAlmox=c=>c.status==='cautelada'&&!!c.devPend&&!!c.devAss;
 function devolver(id){
 const c=C(id);if(!c)return;const u=user(c.userId);
 const ls=(c.itens||[]).map((l,i)=>({l,i})).filter(x=>pend(x.l)>0);
@@ -868,47 +884,87 @@ ${ls.map(({l,i})=>`<div class="linha-item"><span class="nm">${esc(l.nome)}${tamT
 <input class="i" type="number" name="q${i}" min="0" max="${pend(l)}" value="${pend(l)}" aria-label="Quantidade devolvida">
 <select class="i estado-sel" name="e${i}"><option value="bom">Em bom estado</option><option value="danificado">Danificado / inservível</option><option value="extraviado">Extraviado (não devolvido)</option></select></div>`).join('')}
 <label class="f"><span>Observação (obrigatória se houver dano ou extravio)</span><input class="i" name="obs"></label>
-<p class="small muted">Peças em bom estado voltam para a prateleira. Danificadas ou extraviadas saem do estoque e ficam registradas como ocorrência.</p>
-<div class="ass-box stack"><span class="sep-lbl">Assinaturas da devolução (descautela)</span>
-<p class="aviso">Entregue o aparelho ao militar. Ao digitar a senha, ${esc(nomeU(u))} confirma a devolução do material acima, no estado informado.</p>
-<label class="f"><span>Senha do Almox EsFO de ${esc(nomeU(u))}</span><input class="i" type="password" name="sMil" autocomplete="off"></label>
-<label class="f"><span>Sua senha (${esc(nomeM(sess.userId))}, responsável pelo recebimento)</span><input class="i" type="password" name="sAlm" autocomplete="current-password"></label></div>
-<p class="erro" id="dev-erro"></p></form>`,`<button class="btn" data-act="fechar">Voltar</button><button class="btn btn-pri" data-act="confirmarDev" data-id="${c.id}">Assinar e registrar devolução</button>`);
+<p class="small muted">Depois de registrar, ${esc(nomeU(u))} assina a devolução no próprio celular (em "Início") e você assina por último para concluir. Só então o estoque é atualizado.</p>
+<p class="erro" id="dev-erro"></p></form>`,`<button class="btn" data-act="fechar">Voltar</button><button class="btn" data-act="registrarDev" data-id="${c.id}" data-modo="balcao">Militar assina aqui (senha)</button><button class="btn btn-pri" data-act="registrarDev" data-id="${c.id}" data-modo="celular">Registrar e pedir assinatura no celular</button>`);
 }
-async function confirmarDev(id){
+async function registrarDev(id,modo){
 const c=C(id);const f=$('#f-dev');if(!c||!f)return;const fd=new FormData(f);const obs=String(fd.get('obs')||'').trim();
 const mov=(c.itens||[]).map((l,i)=>({i,q:Math.min(int(fd.get('q'+i)),pend(l)),e:String(fd.get('e'+i)||'bom')})).filter(x=>x.q>0);
 if(!mov.length){$('#dev-erro').textContent='Informe a quantidade devolvida.';return;}
 if(mov.some(x=>x.e!=='bom')&&!obs){$('#dev-erro').textContent='Descreva o dano ou o extravio na observação.';return;}
-const sMil=String(fd.get('sMil')||''),sAlm=String(fd.get('sAlm')||'');
-if(!sMil||!sAlm){$('#dev-erro').textContent='A devolução precisa das duas assinaturas: a senha do militar e a sua.';return;}
-const um=user(c.userId);
-const txtDev=mov.map(x=>{const l=c.itens[x.i];return `${x.q}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}${x.e!=='bom'?' – '+x.e:''}`;}).join(', ');
-// 1) senha do militar, digitada no aparelho do almoxarifado (não troca a sessão atual)
-try{await comAuthSecundario(a2=>signInWithEmailAndPassword(a2,um.email,sMil));}
-catch(e){$('#dev-erro').textContent=e.code==='auth/too-many-requests'?erroFirebase(e):`Senha de ${nomeU(um)} incorreta. Peça para digitar de novo.`;return;}
-// 2) senha do responsável pelo almoxarifado
-try{const a=auth.currentUser;await reauthenticateWithCredential(a,EmailAuthProvider.credential(a.email,sAlm));}
-catch(e){$('#dev-erro').textContent=(e.code==='auth/invalid-credential'||e.code==='auth/wrong-password')?'A sua senha (responsável) está incorreta.':erroFirebase(e);return;}
-const emA=nowISO();
-const dMil=`ALMOX ESFO | Devolução (descautela) | Cautela ${nr(c.num)} | Entregue por ${nomeU(um)} | Material: ${txtDev} | ${emA}`;
-const dAlm=`ALMOX ESFO | Recebimento da devolução | Cautela ${nr(c.num)} | Recebido por ${nomeM(sess.userId)} de ${nomeU(um)} | Material: ${txtDev} | ${emA}`;
-const assDev={em:emA,material:txtDev,obs,
-militar:{por:c.userId,em:emA,metodo:'balcao',dados:dMil,hash:await hashTexto(dMil),aparelho:navigator.userAgent.slice(0,160)},
-almox:{por:sess.userId,em:emA,metodo:'senha',dados:dAlm,hash:await hashTexto(dAlm),aparelho:navigator.userAgent.slice(0,160)}};
-try{await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',id);const o=(await tx.get(cref)).data();if(!o||o.status!=='cautelada')throw {msg:'A cautela mudou de situação.'};
-const itens=o.itens.map(l=>({...l}));const ids=[...new Set(mov.map(x=>itens[x.i].itemId))];const sn={};for(const iid of ids)sn[iid]=(await tx.get(doc(db,'itens',iid))).data();
-const ocorr=[...(o.ocorrencias||[])];const em=nowISO();
-ids.forEach(iid=>{sn[iid]._e=JSON.parse(JSON.stringify(sn[iid].estoque||{}));});
-mov.forEach(x=>{const l=itens[x.i];const q=Math.min(x.q,pend(l));if(q<=0)return;l.dev=(l.dev||0)+q;const e=sn[l.itemId]._e;const s=e[l.tam]||{total:0,disp:0};
-if(x.e==='bom')s.disp+=q;else{s.total=Math.max(0,s.total-q);ocorr.push({t:em,nome:l.nome,tam:l.tam,qtd:q,estado:x.e,obs,por:sess.userId});}e[l.tam]=s;});
-ids.forEach(iid=>tx.update(doc(db,'itens',iid),{estoque:sn[iid]._e}));
+const em=nowISO();const txt=devTxt(c,mov);
+const devPend={mov,obs,txt,em,por:sess.userId};
+try{await updateDoc(doc(db,'cautelas',id),{devPend,devAss:null,atualizadoEm:em,log:[...(c.log||[]),{t:em,a:'Devolução registrada',por:sess.userId,obs:txt+(obs?' | '+obs:'')+' | aguardando assinatura do militar'}]});}
+catch(e){$('#dev-erro').textContent=erroFirebase(e);return;}
+D.cautelas=D.cautelas.map(x=>x.id===id?{...x,devPend,devAss:null}:x);
+if(modo==='balcao')assDevBalcao(id);
+else{closeModal();toast(`Devolução registrada. ${nomeM(c.userId)} foi avisado para assinar no celular.`);}
+}
+const textoDevMil=(c,em)=>`ALMOX ESFO | Devolução (descautela) | Cautela ${nr(c.num)} | Devolvido por ${nomeM(c.userId)} | Material: ${c.devPend.txt}${c.devPend.obs?' | Obs.: '+c.devPend.obs:''} | ${em}`;
+const avisoDevMil=c=>`<div class="ficha"><p style="font-weight:600">${esc(nomeM(c.userId))}</p><p>${esc(c.devPend.txt)}</p>${c.devPend.obs?`<p class="small">Obs.: ${esc(c.devPend.obs)}</p>`:''}</div>
+<p class="aviso">Declaro que devolvi ao almoxarifado da EsFO o material acima, na quantidade e no estado informados.</p>`;
+/* Militar assina no próprio celular */
+function assinarDev(id){
+const c=C(id);if(!c||!devAguardaMilitar(c))return;
+pedirAssinatura({titulo:'Assinar devolução – '+nr(c.num),sub:'Confira o material e o estado antes de assinar.',rotulo:'Assinar devolução',corpo:avisoDevMil(c),
+dados:em=>textoDevMil(c,em),
+onOk:async ass=>{const cc=C(id);if(!cc||!devAguardaMilitar(cc))throw {msg:'Esta devolução já foi assinada ou foi cancelada.'};
+await updateDoc(doc(db,'cautelas',id),{devAss:ass,log:[...(cc.log||[]),{t:ass.em,a:'Devolução assinada pelo militar',por:sess.userId,obs:FORMA[ass.metodo]||ass.metodo}]});
+closeModal();toast('Devolução assinada. O almoxarifado vai concluir.');}});
+}
+/* Alternativa: militar digita a senha no aparelho do almoxarifado */
+function assDevBalcao(id){
+const c=C(id);if(!c||!devAguardaMilitar(c))return;const u=user(c.userId);
+openModal('Assinatura da devolução no balcão – '+nr(c.num),`<form id="f-assdevbal" data-id="${c.id}" class="stack">${avisoDevMil(c)}
+<label class="f"><span>Senha do Almox EsFO de ${esc(nomeU(u))}</span><input class="i" type="password" name="s" required autocomplete="off"></label>
+<p class="erro" id="assdevbal-erro"></p><button class="btn btn-pri btn-block">Assinar (militar) e seguir para a sua assinatura</button>
+<p class="small muted">Ou feche esta janela: ${esc(nomeU(u))} pode assinar no próprio celular, em "Início".</p></form>`);
+}
+async function confirmarAssDevBalcao(form,fd){
+const c=C(form.dataset.id);if(!c||!devAguardaMilitar(c))return;const u=user(c.userId);
+try{await comAuthSecundario(a2=>signInWithEmailAndPassword(a2,u.email,String(fd.get('s'))));}
+catch(e){$('#assdevbal-erro').textContent=e.code==='auth/too-many-requests'?erroFirebase(e):'Senha incorreta. Peça ao militar para digitar de novo.';return;}
+const em=nowISO();const dados=textoDevMil(c,em);
+const ass={por:c.userId,em,metodo:'balcao',dados,hash:await hashTexto(dados),registradoPor:sess.userId,aparelho:navigator.userAgent.slice(0,160)};
+try{await updateDoc(doc(db,'cautelas',c.id),{devAss:ass,log:[...(c.log||[]),{t:em,a:'Devolução assinada pelo militar',por:c.userId,obs:FORMA.balcao}]});}
+catch(e){$('#assdevbal-erro').textContent=erroFirebase(e);return;}
+D.cautelas=D.cautelas.map(x=>x.id===c.id?{...x,devAss:ass}:x);
+assinarDevAlmox(c.id);
+}
+/* Responsável pelo almoxarifado assina por último e conclui */
+function assinarDevAlmox(id){
+const c=C(id);if(!c||!devAguardaAlmox(c))return;
+pedirAssinatura({titulo:'Concluir devolução – '+nr(c.num),sub:'Assinatura do responsável pelo almoxarifado.',rotulo:'Assinar e concluir',
+corpo:`<div class="ficha"><p style="font-weight:600">${esc(nomeM(c.userId))}</p><p>${esc(c.devPend.txt)}</p>${c.devPend.obs?`<p class="small">Obs.: ${esc(c.devPend.obs)}</p>`:''}<dl class="meta"><dt>Militar assinou</dt><dd>${fmt(c.devAss.em)}, ${esc(FORMA[c.devAss.metodo]||c.devAss.metodo)}</dd></dl></div>
+<p class="aviso">Declaro que recebi de volta o material acima, na quantidade e no estado informados.</p>`,
+dados:em=>`ALMOX ESFO | Recebimento da devolução | Cautela ${nr(c.num)} | Recebido por ${nomeM(sess.userId)} de ${nomeM(c.userId)} | Material: ${c.devPend.txt} | ${em}`,
+onOk:async ass=>{await concluirDev(id,ass);}});
+}
+async function concluirDev(id,assAlm){
+await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',id);const o=(await tx.get(cref)).data();
+if(!o||o.status!=='cautelada'||!o.devPend||!o.devAss)throw {msg:'A devolução mudou de situação. Feche e confira.'};
+const dp=o.devPend;const obs=dp.obs||'';
+const itens=o.itens.map(l=>({...l}));const mov=dp.mov.filter(x=>itens[x.i]);
+const ids=[...new Set(mov.map(x=>itens[x.i].itemId))];const sn={};for(const iid of ids)sn[iid]=(await tx.get(doc(db,'itens',iid))).data();
+const ocorr=[...(o.ocorrencias||[])];const em=assAlm.em;const reais=[];
+ids.forEach(iid=>{sn[iid]._e=JSON.parse(JSON.stringify((sn[iid]&&sn[iid].estoque)||{}));});
+mov.forEach(x=>{const l=itens[x.i];const q=Math.min(x.q,pend(l));if(q<=0)return;reais.push({...x,q});l.dev=(l.dev||0)+q;const e=sn[l.itemId]._e;const st=e[l.tam]||{total:0,disp:0};
+if(x.e==='bom')st.disp+=q;else{st.total=Math.max(0,st.total-q);ocorr.push({t:em,nome:l.nome,tam:l.tam,qtd:q,estado:x.e,obs,por:sess.userId});}e[l.tam]=st;});
+if(!reais.length)throw {msg:'Não há mais material pendente para devolver nesta cautela.'};
+ids.forEach(iid=>{if(sn[iid])tx.update(doc(db,'itens',iid),{estoque:sn[iid]._e});});
 const resta=itens.some(l=>pend(l)>0);
-const txt=mov.map(x=>`${x.q}× ${itens[x.i].nome}${tamTxt(itens[x.i].tam)?' ('+itens[x.i].tam+')':''}${x.e!=='bom'?' – '+x.e:''}`).join(', ');
-tx.update(cref,{itens,ocorrencias:ocorr,devolucoes:[...(o.devolucoes||[]),assDev],status:resta?'cautelada':'devolvida',atualizadoEm:em,...(resta?{}:{devolvidaEm:em}),
-log:[...(o.log||[]),entrada(resta?'Devolução parcial':'Devolvida',txt+(obs?' | '+obs:'')+' | Assinada pelo militar e pelo responsável')]});
-mov.filter(x=>x.e!=='bom').forEach(x=>{tx.set(doc(collection(db,'movimentos')),{t:em,tipo:'ocorrencia',itemId:itens[x.i].itemId,nome:itens[x.i].nome,tam:itens[x.i].tam,qtd:x.q,motivo:x.e,obs,cautela:id,num:o.num,userId:o.userId,por:sess.userId});});
-});closeModal();toast('Devolução registrada.');}catch(e){console.error(e);$('#dev-erro').textContent=erroFirebase(e);}
+const reg={em,material:dp.txt,obs,militar:o.devAss,almox:assAlm,registradaEm:dp.em,registradaPor:dp.por};
+tx.update(cref,{itens,ocorrencias:ocorr,devolucoes:[...(o.devolucoes||[]),reg],devPend:null,devAss:null,status:resta?'cautelada':'devolvida',atualizadoEm:em,...(resta?{}:{devolvidaEm:em}),
+log:[...(o.log||[]),{t:em,a:'Devolução assinada pelo almoxarifado',por:sess.userId,obs:FORMA_ALM[assAlm.metodo]||assAlm.metodo},entrada(resta?'Devolução parcial':'Devolvida',dp.txt+(obs?' | '+obs:''))]});
+reais.filter(x=>x.e!=='bom').forEach(x=>{tx.set(doc(collection(db,'movimentos')),{t:em,tipo:'ocorrencia',itemId:itens[x.i].itemId,nome:itens[x.i].nome,tam:itens[x.i].tam,qtd:x.q,motivo:x.e,obs,cautela:id,num:o.num,userId:o.userId,por:sess.userId});});
+});
+closeModal();toast('Devolução concluída e estoque atualizado.');
+}
+async function cancelarDev(id){
+const c=C(id);if(!c||!c.devPend)return;
+if(!confirm('Cancelar esta devolução? Nada foi alterado no estoque; o material continua em nome do militar.'))return;
+await updateDoc(doc(db,'cautelas',id),{devPend:null,devAss:null,atualizadoEm:nowISO(),log:[...(c.log||[]),entrada('Devolução cancelada pelo almoxarifado')]});
+closeModal();toast('Devolução cancelada.');
 }
 function editarPrazo(id){
 const c=C(id);if(!c)return;
@@ -1287,7 +1343,11 @@ balAdd:balAdd,
 balRm:el=>{ui.bal.linhas.splice(+el.dataset.i,1);desenharBalcao();},
 balGravar:balGravar,
 devolver:el=>devolver(el.dataset.id),
-confirmarDev:el=>confirmarDev(el.dataset.id),
+registrarDev:el=>registrarDev(el.dataset.id,el.dataset.modo),
+assinarDev:el=>assinarDev(el.dataset.id),
+assDevBalcao:el=>assDevBalcao(el.dataset.id),
+assDevAlmox:el=>assinarDevAlmox(el.dataset.id),
+cancelarDev:el=>cancelarDev(el.dataset.id),
 prazo:el=>editarPrazo(el.dataset.id),
 novaCat:()=>formCat(null),
 editCat:el=>formCat(D.cats.find(c=>c.id===el.dataset.id)),
@@ -1332,6 +1392,7 @@ const forms={
 'f-trf':(f,fd)=>confirmarTransf(f,fd),
 'f-recusar':(f,fd)=>confirmarRecusa(f,fd),
 'f-assbal':(f,fd)=>confirmarAssBalcao(f,fd),
+'f-assdevbal':(f,fd)=>confirmarAssDevBalcao(f,fd),
 'f-prazo':(f,fd)=>salvarPrazo(f,fd),
 'f-cat':(f,fd)=>salvarCat(f,fd),
 'f-item':(f,fd)=>salvarItem(f,fd),
@@ -1365,12 +1426,15 @@ if(k==='balObs')ui.bal.obs=e.target.value;
 /* ============ Firebase: sessão e dados ao vivo ============ */
 function pararEscutas(){unsubs.forEach(u=>{try{u();}catch(e){}});unsubs=[];loaded={};}
 const prevSt=new Map();
+const chaveSt=c=>[c.status,c.assinatura?1:0,c.devPend?1:0,c.devAss?1:0].join('|');
 function avisosCautelas(snap,admin){
-snap.docChanges().forEach(ch=>{const c={id:ch.doc.id,...ch.doc.data()};const ant=prevSt.get(c.id);prevSt.set(c.id,c.status+'|'+(c.assinatura?1:0));
-if(ch.type==='removed'||ant===c.status+'|'+(c.assinatura?1:0))return;
+snap.docChanges().forEach(ch=>{const c={id:ch.doc.id,...ch.doc.data()};const ant=prevSt.get(c.id);const k=chaveSt(c);prevSt.set(c.id,k);
+if(ch.type==='removed'||ant===k)return;const antAss=ant?ant.split('|')[1]:'0',antDev=ant?ant.split('|')[2]:'0',antDevA=ant?ant.split('|')[3]:'0';
 if(admin){if(c.status==='solicitada'&&!ant)avisar('Novo pedido',`${nomeM(c.userId)} – ${itensTxt(c)}`);
-if(c.status==='separada'&&c.assinatura&&ant&&ant.endsWith('|0'))avisar('Recebimento assinado',`${nomeM(c.userId)} – ${nr(c.num)}. Confirme a entrega.`);}
-else if(ant){if(c.status==='separada'&&!c.assinatura)avisar('Material separado',`${nr(c.num)} pronto para retirada. Assine ao receber.`);
+if(c.status==='separada'&&c.assinatura&&ant&&antAss==='0')avisar('Recebimento assinado',`${nomeM(c.userId)} – ${nr(c.num)}. Assine a entrega.`);
+if(devAguardaAlmox(c)&&ant&&antDevA==='0')avisar('Devolução assinada pelo militar',`${nomeM(c.userId)} – ${nr(c.num)}. Assine para concluir.`);}
+else if(ant){if(devAguardaMilitar(c)&&antDev==='0')avisar('Devolução para assinar',`${nr(c.num)}: ${c.devPend.txt}. Abra o Início para assinar.`);
+if(c.status==='separada'&&!c.assinatura)avisar('Material separado',`${nr(c.num)} pronto para retirada. Assine ao receber.`);
 if(c.status==='recusada')avisar('Pedido recusado',nr(c.num));
 if(c.status==='devolvida')avisar('Devolução registrada',nr(c.num));}
 });
@@ -1404,7 +1468,7 @@ D.users=arr;const eu=D.users.find(u=>u.id===uid);if(!eu||!eu.ativo||eu.perfil!==
 else if(nome==='cats')D.cats=ordenarCats(arr);
 else if(nome==='itens'){D.itens=arr;ordenarItens(D.itens);}
 else if(nome==='trfIn'){if(!prim)snap.docChanges().forEach(ch=>{if(ch.type==='added'){const c=ch.doc.data();avisar('Transferência para você',`${nomeM(c.userId)} quer transferir material. Abra o Início para aceitar.`);}});D.trfIn=arr;}
-else{if(prim)snap.docs.forEach(d=>prevSt.set(d.id,d.data().status+'|'+(d.data().assinatura?1:0)));else avisosCautelas(snap,adm);
+else{if(prim)snap.docs.forEach(d=>prevSt.set(d.id,chaveSt(d.data())));else avisosCautelas(snap,adm);
 baldes[nome]=arr;D.cautelas=juntarCautelas();if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
 depois(prim);
 },err=>{

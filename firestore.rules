@@ -1,5 +1,5 @@
 rules_version = '2';
-// Regras de segurança do Almox EsFO (v1.5)
+// Regras de segurança do Almox EsFO (v1.5.3)
 // Copie todo este texto em Firebase → Firestore → Regras e clique em Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -103,6 +103,10 @@ service cloud.firestore {
               || (resource.data.status == 'separada' && resource.data.assinatura == null && muda(['assinatura','log']))
               // oferecer ou desistir de uma transferência
               || (resource.data.status == 'cautelada' && muda(['transferPara','transfer','log']))
+              // assinar, no próprio celular, a devolução registrada pelo almoxarifado
+              || (resource.data.status == 'cautelada' && resource.data.get('devPend', null) != null
+                  && resource.data.get('devAss', null) == null && request.resource.data.devAss.por == uid()
+                  && muda(['devAss','log']))
            ))
         // destinatário aceita ou recusa a transferência
         || (ativo() && resource.data.transferPara == uid() && muda(['transferPara','transfer','itens','status','log']));
