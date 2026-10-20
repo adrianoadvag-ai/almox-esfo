@@ -462,3 +462,15 @@ tr.cat-row td{background:var(--surface-2);font-weight:600;font-size:.82rem;color
 .busca-mat{position:relative;margin-bottom:.9rem}
 .busca-mat .i{width:100%;padding-right:2.4rem}
 .busca-mat .busca-x{position:absolute;right:.35rem;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--muted,#777);font-size:1.4rem;line-height:1;cursor:pointer;width:2rem;height:2rem}
+/* v1.6.0: material sem estoque, separação parcial, transferência/devolução como no SICAM */
+.card.sem-estq{opacity:.62}
+.card.sem-estq h3{color:var(--muted)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.linha-item.falta .nm{color:var(--ink)}
+.linha-item.falta{background:color-mix(in srgb,var(--stamp) 5%,transparent)}
+.trf-lista label{flex:1;cursor:pointer;line-height:1.35}
+.trf-lista li:has(input[type=checkbox]:checked){background:color-mix(in srgb,var(--olive) 8%,var(--surface))}
+select.i optgroup{font-weight:700}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.versao-app a{color:inherit}
+.linha-item.falta .i{color:var(--ink)}
