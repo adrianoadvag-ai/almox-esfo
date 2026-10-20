@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.5';
+const VERSAO='1.6.0';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -17,7 +17,7 @@ const configurado=FB&&FB.apiKey&&!/COLE/i.test(FB.apiKey);
 let app,auth,db;
 let fase=configurado?'carregando':'naoconfig'; // naoconfig | carregando | setup | login | cadastro | verificar | aguardando | app | erro
 let erroMsg='',loginMsg='';
-const D0=()=>({users:[],cats:[],itens:[],cautelas:[],trfIn:[],dir:[],dirDoc:null,setup:null,eu:null});
+const D0=()=>({users:[],cats:[],itens:[],cautelas:[],trfIn:[],dir:[],dirDoc:null,setup:null,eu:null,convites:[]});
 let D=D0();
 let sess=null,bootstrapping=false,unsubs=[],loaded={},aguardandoUnsub=null;
 const ui={view:null,cart:[],cat:null,q:'',hq:'',mq:'',matQ:'',histTudo:false,cadTipo:'cadete'};
@@ -53,6 +53,17 @@ const ROM=[['gandola','Gandola / túnica (nº)'],['camisa','Camisa (tam.)'],['ca
 ['cobertura','Cobertura – medida da cabeça'],['luva','Luva (tam.)'],['cinto','Cinto (tam.)']];
 const ROMN=Object.fromEntries(ROM);
 const ANOS=[['1','1º ano'],['2','2º ano'],['3','3º ano']];
+/* Companhia / curso do cadete. A turma (/1 ou /2) existe no 1º ano. */
+const CIAS=[['1','1ª Cia'],['2','2ª Cia'],['3','3ª Cia'],['CHOE','CHOE']];
+const TURMAS=[['','Única'],['/1','/1'],['/2','/2']];
+const ciaTxt=u=>{if(!u||!u.cia)return '';const c=(CIAS.find(x=>x[0]===u.cia)||[0,u.cia])[1];return c+(u.subturma?' '+u.subturma:'');};
+/* CPF: só números, com conferência dos dígitos verificadores */
+const soNum=s=>String(s||'').replace(/\D/g,'');
+const cpfFmt=s=>{const d=soNum(s);return d.length===11?`${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`:String(s||'');};
+const cpfMask=s=>{const d=soNum(s);return d.length===11?`***.${d.slice(3,6)}.${d.slice(6,9)}-**`:(s?'***':'');};
+function cpfValido(s){const d=soNum(s);if(d.length!==11||/^(\d)\1{10}$/.test(d))return false;
+const dv=n=>{let t=0;for(let i=0;i<n;i++)t+=int(d[i])*(n+1-i);const r=(t*10)%11;return r===10?0:r;};return dv(9)===int(d[9])&&dv(10)===int(d[10]);}
+const telFmt=s=>{const d=soNum(s);if(d.length===11)return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;if(d.length===10)return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;return String(s||'').trim();};
 const POSTOS=['Cel PM','Ten Cel PM','Maj PM','Cap PM','1º Ten PM','2º Ten PM','Asp Of PM'];
 const UNID={un:['unidade','unidades'],par:['par','pares'],conj:['conjunto','conjuntos']};
 const qtdU=(q,u)=>`${q} ${(UNID[u]||UNID.un)[q===1?0:1]}`;
@@ -62,13 +73,22 @@ const me=()=>sess&&(D.users.find(u=>u.id===sess.userId)||D.eu);
 const user=id=>D.users.find(u=>u.id===id)||D.dir.find(u=>u.id===id)||(D.eu&&D.eu.id===id?D.eu:null)||{nome:'?',guerra:'?',grad:''};
 const nomeM=id=>{const u=user(id);return ((u.grad?u.grad+' ':'')+(u.guerra||u.nome||'?')).trim();};
 const nomeU=u=>((u.grad?u.grad+' ':'')+(u.guerra||u.nome||'?')).trim();
-const turmaU=u=>u.tipo==='oficial'?(u.opm||'Oficial'):[u.ano?u.ano+'º ano':'',u.pelotao||''].filter(Boolean).join(' · ');
+const turmaU=u=>u.perfil==='almox'&&!u.cia&&!u.pelotao?'Almoxarifado':u.tipo==='oficial'?(u.opm||'Oficial'):[u.cia?ciaTxt(u):(u.ano?u.ano+'º ano':''),u.pelotao||''].filter(Boolean).join(' · ');
+const usuarioDe=u=>u.usuario||(ehFicticio(u.email)?String(u.email).slice(0,-DOMF.length):u.email);
 const ehAlmox=()=>{const u=me();return !!u&&u.perfil==='almox';};
+/* Gestor do almoxarifado: a conta de gestor é separada da conta de cadete da mesma pessoa ("vínculo").
+   Ninguém atende a própria cautela: o pedido do gestor é atendido por outro gestor. */
+const ehPrincipal=()=>{const u=me();return !!u&&u.perfil==='almox'&&(u.principal===true||(D.setup&&D.setup.por===u.id));};
+const minhaVinc=c=>{const u=me();return !!(u&&u.perfil==='almox'&&u.vinculo&&c&&c.userId===u.vinculo);};
 
 /* Catálogo */
 const cat=id=>D.cats.find(c=>c.id===id)||{nome:'Sem categoria',ordem:999};
 const item=id=>D.itens.find(i=>i.id===id)||{nome:'?',tamanhos:[],estoque:{},unidade:'un'};
 const est=(it,t)=>((it.estoque||{})[t])||{total:0,disp:0};
+/* Reserva: peças pedidas pelo app e ainda não separadas ficam reservadas; o cadete só pede o que está livre */
+const resv=(it,t)=>Math.max(0,int(((it.reservado||{})[t])||0));
+const livre=(it,t)=>Math.max(0,est(it,t).disp-resv(it,t));
+const temLivre=it=>(it.tamanhos||[]).some(t=>livre(it,t)>0);
 const ordenarCats=a=>a.sort((x,y)=>(x.ordem||0)-(y.ordem||0)||String(x.nome).localeCompare(y.nome,'pt-BR'));
 const ordenarItens=a=>a.sort((x,y)=>(cat(x.catId).ordem||0)-(cat(y.catId).ordem||0)||(x.ordem||0)-(y.ordem||0)||String(x.nome).localeCompare(y.nome,'pt-BR'));
 const sugTam=(it,u)=>{if(!it.campo||!u||!u.romaneio)return '';const v=String(u.romaneio[it.campo]||'').trim();if(!v)return '';
@@ -85,7 +105,9 @@ const stamp=(c,lg)=>{const k=lg?' lg':'';
 if(c.status==='separada'&&c.assinatura)return `<span class="stamp c-ok${k}">Assinada</span>`;
 if(atrasada(c))return `<span class="stamp c-stamp${k}">Em atraso</span>`;
 if(c.status==='cautelada'&&c.transferPara)return `<span class="stamp c-brass${k}">Em transferência</span>`;
+if(c.status==='cautelada'&&(c.devSol||c.devPend))return `<span class="stamp c-brass${k}">Em devolução</span>`;
 const s=ST[c.status]||[c.status,''];return `<span class="stamp ${s[1]}${k}">${s[0]}</span>`;};
+const naoAtTxt=c=>(c.naoAtendidos||[]).length?`<p class="small c-stamp" style="margin-top:.3rem">Não atendido por falta de estoque: ${c.naoAtendidos.map(x=>`${x.qtd}× ${esc(x.nome)}${tamTxt(x.tam)?' ('+esc(x.tam)+')':''}`).join(', ')}. Peça de novo quando houver estoque.</p>`:'';
 const linhaTxt=l=>`${l.qtd}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}`;
 const itensTxt=c=>(c.itens||[]).map(linhaTxt).join(', ');
 const itensLi=(c,soPend)=>'<ul class="itens">'+(c.itens||[]).filter(l=>!soPend||pend(l)>0).map(l=>{
@@ -121,6 +143,9 @@ aplicarTema(temaAtual);
 const seletorTema=()=>`<div class="tema-sel" role="group" aria-label="Aparência do app">${TEMAS.map(([v,n])=>`<button type="button" data-act="tema" data-tema="${v}" aria-pressed="${temaAtual===v}">${n}</button>`).join('')}</div>`;
 const SEAL=`<span class="brasoes"><img src="brasao-apmg.png" alt="Brasão da APMG"><img src="brasao-esfo.png" alt="Brasão da EsFO"></span>`;
 const NOME='Almox EsFO',SUB='Cautela de materiais do almoxarifado';
+/* Política de privacidade (LGPD): ao mudar o texto, mude a versão para pedir o aceite de novo */
+const PRIV_VER='2026-10-20',PRIV_URL='privacidade.html';
+const linkPriv=()=>`<a href="${PRIV_URL}" target="_blank" rel="noopener">Política de Privacidade</a>`;
 const IC={
 ini:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11l9-7 9 7v9H3z"/><path d="M9 20v-6h6v6"/></svg>',
 sol:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16l-1.5 12h-13z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg>',
@@ -207,33 +232,49 @@ return `<div class="grid2">${grad}<label class="f"><span>Nome de guerra</span><i
 <label class="f"><span>Nome completo</span><input class="i" name="nome" value="${esc(u.nome||'')}" required></label>`;
 }
 // Dados complementares: preenchidos pelo próprio militar dentro do sistema ("Meus dados")
-function camposComp(u){
-u=u||{};
-return `<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" inputmode="numeric"></label>
-<label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" value="${esc(u.telefone||'')}" inputmode="tel" placeholder="(41) 9…"></label></div>
-${u.tipo==='oficial'
-?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" placeholder="Ex.: 12º BPM"></label>`
-:`<div class="grid2"><label class="f"><span>Ano do curso</span><select class="i" name="ano">${ANOS.map(([v,n])=>`<option value="${v}" ${String(u.ano||'1')===v?'selected':''}>${n}</option>`).join('')}</select></label>
-<label class="f"><span>Pelotão</span><input class="i" name="pelotao" value="${esc(u.pelotao||'')}" placeholder="Ex.: 1º Pelotão Alfa"></label></div>
-<label class="f"><span>Turma</span><input class="i" name="turma" value="${esc(u.turma||'')}" placeholder="Ex.: 1º CFO PM 2026"></label>`}`;
+function camposComp(u,tipo,obrig){
+u=u||{};tipo=tipo||u.tipo||'cadete';const rq=obrig?' required':'';
+const pels=[...new Set((D.dir||[]).map(x=>x.pelotao).concat((D.users||[]).map(x=>x.pelotao)).filter(Boolean))].sort();
+return `${tipo==='oficial'
+?`<label class="f"><span>OPM / unidade</span><input class="i" name="opm" value="${esc(u.opm||'')}" placeholder="Ex.: 12º BPM"${rq}></label>`
+:`<div class="grid2"><label class="f"><span>Companhia / curso</span><select class="i" name="cia"${rq}><option value="">Escolha…</option>${CIAS.map(([v,n])=>`<option value="${v}" ${u.cia===v?'selected':''}>${n}</option>`).join('')}</select></label>
+<label class="f"><span>Turma <span class="muted small">(o 1º ano tem /1 e /2)</span></span><select class="i" name="subturma">${TURMAS.map(([v,n])=>`<option value="${v}" ${(u.subturma||'')===v?'selected':''}>${n}</option>`).join('')}</select></label></div>
+<label class="f"><span>Pelotão</span><input class="i" name="pelotao" value="${esc(u.pelotao||'')}" placeholder="Ex.: 1º Pelotão Alfa" list="lista-pel"${rq}><datalist id="lista-pel">${pels.map(p=>`<option value="${esc(p)}">`).join('')}</datalist></label>`}
+<div class="grid2"><label class="f"><span>CPF</span><input class="i" name="cpf" value="${esc(cpfFmt(u.cpf||''))}" inputmode="numeric" placeholder="000.000.000-00" maxlength="14" data-mask="cpf"${rq}></label>
+<label class="f"><span>RG</span><input class="i" name="rg" value="${esc(u.rg||'')}" inputmode="numeric"${rq}></label></div>
+<div class="grid2"><label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" value="${esc(u.telefone||'')}" inputmode="tel" placeholder="(41) 9…" maxlength="16" data-mask="tel"${rq}></label>
+<label class="f"><span>E-mail pessoal <span class="muted small">(opcional)</span></span><input class="i" name="emailPessoal" type="email" value="${esc(u.emailPessoal||'')}" autocapitalize="off"></label></div>`;
 }
 function camposRom(u){
 u=u||{};
 return `<div class="romaneio">${ROM.map(([k,n])=>`<label class="f"><span>${n}</span><input class="i" name="rom_${k}" value="${esc((u.romaneio||{})[k]||'')}" autocapitalize="characters"></label>`).join('')}</div>`;
 }
 // Tudo junto (edição pelo almoxarife)
-const camposDados=u=>camposIdent(u,u.tipo)+camposComp(u)+`<h3 style="margin-top:1rem">Romaneio</h3>`+camposRom(u);
+const camposDados=u=>camposIdent(u,u.tipo)+(u.perfil==='almox'?'':camposComp(u))+(u.perfil==='almox'?'':`<h3 style="margin-top:1rem">Romaneio</h3>`+camposRom(u));
 function lerDados(fd,tipo){
 const g=k=>String(fd.get(k)||'').trim();const tem=k=>fd.has(k);
 const o={};
 if(tem('grad'))o.grad=g('grad');if(tem('guerra'))o.guerra=g('guerra').toUpperCase();if(tem('nome'))o.nome=g('nome');
-if(tem('rg'))o.rg=g('rg');if(tem('telefone'))o.telefone=g('telefone');
-if(tipo==='oficial'){if(tem('opm'))o.opm=g('opm');}else{if(tem('ano'))o.ano=g('ano');if(tem('pelotao'))o.pelotao=g('pelotao');if(tem('turma'))o.turma=g('turma');}
+if(tem('rg'))o.rg=g('rg');if(tem('telefone'))o.telefone=telFmt(g('telefone'));
+if(tem('cpf'))o.cpf=soNum(g('cpf'));if(tem('emailPessoal'))o.emailPessoal=g('emailPessoal').toLowerCase();
+if(tipo==='oficial'){if(tem('opm'))o.opm=g('opm');}
+else{if(tem('cia')){o.cia=g('cia');o.curso=o.cia==='CHOE'?'CHOE':(o.cia?'CFO':'');if(/^[123]$/.test(o.cia))o.ano=o.cia;}
+if(tem('subturma'))o.subturma=g('subturma');if(tem('pelotao'))o.pelotao=g('pelotao');}
 if(tem('rom_'+ROM[0][0])){o.romaneio={};ROM.forEach(([k])=>{const v=g('rom_'+k).toUpperCase();if(v)o.romaneio[k]=v;});}
 return o;
 }
-/* Dados mínimos para pedir material: RG, pelotão (ou OPM) e romaneio */
-const dadosCompletos=u=>!!(u&&u.rg&&(u.tipo==='oficial'?u.opm:u.pelotao)&&u.romaneio&&Object.keys(u.romaneio).length);
+/* Confere os dados complementares; devolve a mensagem de erro ou '' */
+function conferirDados(d,tipo,obrig){
+if(d.cpf&&!cpfValido(d.cpf))return 'CPF inválido. Confira os números.';
+if(d.emailPessoal&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.emailPessoal))return 'E-mail pessoal inválido.';
+if(d.telefone&&soNum(d.telefone).length<10)return 'Telefone incompleto: informe o DDD e o número.';
+if(obrig){if(tipo==='oficial'?!d.opm:(!d.cia||!d.pelotao))return tipo==='oficial'?'Informe a OPM.':'Informe a Companhia e o pelotão.';
+if(!d.cpf)return 'Informe o CPF.';if(!d.rg)return 'Informe o RG.';if(!d.telefone)return 'Informe o telefone.';}
+return '';
+}
+/* Dados mínimos do cadastro: CPF, RG, telefone e Companhia/pelotão (ou OPM) */
+const dadosCompletos=u=>!!(u&&u.cpf&&u.rg&&u.telefone&&(u.tipo==='oficial'?u.opm:(u.cia&&u.pelotao)));
+const romaneioOk=u=>!!(u&&u.romaneio&&Object.keys(u.romaneio).length);
 
 /* ----- Telas ----- */
 const campoEmailSenha=almox=>`${almox?`<label class="f"><span>Usuário para entrar no sistema (ou e-mail institucional)</span><input class="i" name="email" type="text" required autocapitalize="off" placeholder="Ex.: almox"></label><p class="small muted" style="margin-top:-.4rem">Como a conta da Furrielação no SICAM: com um usuário (sem @) não é preciso confirmar e-mail, e o seu e-mail institucional fica livre para a sua conta de cadete.</p>`:`<label class="f"><span>E-mail institucional</span><input class="i" name="email" type="email" required autocapitalize="off" placeholder="nome@${esc(DOMINIOS[0])}"></label>`}
@@ -260,24 +301,44 @@ ${r?'<p style="margin:-.4rem 0 1rem"><span class="stamp c-stamp">Acesso restrito
 <button class="btn btn-pri btn-block">${r?'Entrar no painel':'Entrar'}</button>
 </form>
 <div class="row between" style="margin-top:1rem"><button class="link" data-act="esqueci">Esqueci minha senha</button>
-<button class="link" data-act="irCadastro" data-p="${r?'almox':'cadete'}">${r?'Solicitar conta do almoxarifado':'Criar minha conta'}</button></div>
+<button class="link" data-act="irCadastro" data-p="${r?'almox':'cadete'}">${r?'Criar conta com convite':'Criar minha conta'}</button></div>
 <p class="acesso-f">${r?'<button class="link muted" data-act="tela" data-t="cadete">← Voltar ao acesso dos cadetes</button>':'<button class="link muted" data-act="tela" data-t="almox">Acesso restrito do almoxarifado</button>'}</p>
-${r?'':`<div style="text-align:center">${seletorTema()}</div>`}<p class="versao-app">${NOME} v${VERSAO}</p>
+${r?'':`<div style="text-align:center">${seletorTema()}</div>`}<p class="versao-app">${linkPriv()} · ${NOME} v${VERSAO}</p>
 </div></main>`;
 }
+const checkPriv=()=>`<label class="check"><input type="checkbox" name="lgpd" required><span>Li a <a href="${PRIV_URL}" target="_blank" rel="noopener">Política de Privacidade</a> e autorizo o uso dos meus dados pessoais exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>`;
 function vCadastro(){
-const almox=ui.cadPerfil==='almox';const t=almox?'cadete':ui.cadTipo;
-return `<main class="login${almox?' restrito':''}"><div class="login-card">${cab(almox?'Solicitar conta do almoxarifado':'Criar minha conta')}
-${almox?'<p class="aviso" style="margin-bottom:1rem">A conta do almoxarifado só funciona depois de aprovada pelo responsável pelo almoxarifado.</p>'
-:`<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>`}
-<form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}" data-perfil="${almox?'almox':'cadete'}">
-${camposIdent({},t)}${campoEmailSenha(false)}
-${almox?'<p class="small muted">Já tem conta de cadete com este e-mail? Não precisa de outra: peça ao responsável pelo almoxarifado para dar acesso ao almoxarifado na sua conta (Militares → seu nome → "Tornar almoxarife").</p>':''}
-<p class="small muted">A senha também serve para <b>assinar</b> as cautelas.${almox?'':' Depois de entrar, você completa seus dados e o romaneio em "Meus dados".'}</p>
-<label class="check"><input type="checkbox" name="lgpd" required><span>Autorizo o uso dos meus dados pessoais exclusivamente para o controle de cautela de materiais do almoxarifado da EsFO (LGPD).</span></label>
+if(ui.cadPerfil==='almox')return vCadastroGestor();
+const t=ui.cadTipo;
+return `<main class="login"><div class="login-card">${cab('Criar minha conta')}
+<div class="seg" role="group" style="margin-bottom:1rem"><button type="button" data-act="cadTipo" data-t="cadete" aria-pressed="${t==='cadete'}">Sou cadete da EsFO</button><button type="button" data-act="cadTipo" data-t="oficial" aria-pressed="${t==='oficial'}">Sou oficial</button></div>
+<form id="f-cad" class="stack" autocomplete="off" data-tipo="${t}" data-perfil="cadete">
+${camposIdent({},t)}${camposComp({},t,true)}${campoEmailSenha(false)}
+<p class="small muted">A senha também serve para <b>assinar</b> as cautelas. Depois de entrar, você preenche o romaneio (suas medidas) em "Meus dados".</p>
+${checkPriv()}
 <p class="small muted">Você vai receber um link no e-mail institucional para confirmar a conta. Depois, o almoxarifado libera seu acesso.</p>
 <p class="erro" id="cad-erro"></p>
-<button class="btn btn-pri btn-block">${almox?'Solicitar conta':'Criar conta'}</button>
+<button class="btn btn-pri btn-block">Criar conta</button>
+<button type="button" class="btn btn-block" data-act="irLogin">Já tenho conta</button>
+</form></div></main>`;
+}
+/* Conta de gestor do almoxarifado: usuário (sem e-mail) + código de convite gerado pelo gestor principal */
+const infoConvite=cv=>cv?`<div class="ficha"><p class="small muted">Convite para</p><p style="font-weight:600">${esc(((cv.grad?cv.grad+' ':'')+(cv.guerra||'')).trim())}</p><p class="small muted">${esc(cv.nome||'')}${cv.cadeteId?' · ligado à conta de cadete dele(a)':''}</p></div>`:'';
+function vCadastroGestor(){
+const cv=ui.convite;
+return `<main class="login restrito"><div class="login-card">${cab('Criar conta de gestor do almoxarifado')}
+<p class="aviso" style="margin-bottom:1rem">Peça um <b>código de convite</b> ao gestor principal do almoxarifado. O código vale por 24 horas e só pode ser usado uma vez.</p>
+<form id="f-gestor" class="stack" autocomplete="off">
+<label class="f"><span>Código de convite</span><input class="i mono" name="codigo" required autocapitalize="characters" maxlength="9" placeholder="Ex.: K7QF-2M9P" value="${esc(ui.codigo||'')}" data-chg="convite"></label>
+<div id="conv-info">${infoConvite(cv)}</div>
+<label class="f"><span>Usuário para entrar no painel</span><input class="i" name="usuario" required autocapitalize="off" placeholder="Ex.: romeiro.almox" pattern="[A-Za-z0-9._\\-]{3,30}" title="De 3 a 30 letras, números, ponto, hífen ou sublinhado, sem espaço e sem @"></label>
+<p class="small muted" style="margin-top:-.4rem">Sem @ e sem e-mail: o seu e-mail institucional continua sendo da sua conta de cadete.</p>
+<div class="grid2"><label class="f"><span>Crie uma senha (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
+<label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>
+<p class="small muted">Use uma senha <b>diferente</b> da sua conta de cadete. Ela também serve para assinar entregas e devoluções. Se esquecer, peça um novo convite ao gestor principal.</p>
+${checkPriv()}
+<p class="erro" id="gestor-erro"></p>
+<button class="btn btn-pri btn-block">Criar conta de gestor</button>
 <button type="button" class="btn btn-block" data-act="irLogin">Já tenho conta</button>
 </form></div></main>`;
 }
@@ -314,14 +375,15 @@ if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
 const tipo=form.dataset.tipo||'cadete',perfil=form.dataset.perfil||'cadete';
 const dados=lerDados(fd,tipo);
 if(!dados.guerra||!dados.nome)return err('Preencha o nome de guerra e o nome completo.');
+const falha=conferirDados(dados,tipo,!setup);if(falha)return err(falha);
 const btn=form.querySelector('button.btn-pri');const rot=btn.textContent;btn.disabled=true;btn.textContent='Criando…';
 bootstrapping=true;let cred=null;
 try{
 cred=await createUserWithEmailAndPassword(auth,email,String(fd.get('senha')));
-const base={...dados,tipo,email,perfil,criadoEm:nowISO(),lgpd:nowISO(),romaneio:{}};
+const base={...dados,tipo,email,perfil,criadoEm:nowISO(),lgpd:nowISO(),privacidade:{versao:PRIV_VER,em:nowISO()},romaneio:{}};
 if(setup){
 const b=writeBatch(db);
-b.set(doc(db,'users',cred.user.uid),{...base,ativo:true,pendente:false});
+b.set(doc(db,'users',cred.user.uid),{...base,ativo:true,pendente:false,principal:true});
 b.set(doc(db,'config','setup'),{em:nowISO(),por:cred.user.uid,seed:!!fd.get('seed'),seeded:false});
 await b.commit();
 }else{
@@ -333,6 +395,44 @@ bootstrapping=false;await aoMudarLogin(auth.currentUser);
 bootstrapping=false;console.error(e);
 if(cred){try{await cred.user.delete();}catch(x){}}
 err(erroFirebase(e));btn.disabled=false;btn.textContent=rot;
+}
+}
+/* Convite: código de 8 letras/números (sem 0/O/1/I para não confundir), mostrado como XXXX-XXXX */
+const ALF_CONV='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const novoCodigo=()=>{const r=crypto.getRandomValues(new Uint8Array(8));return [...r].map(b=>ALF_CONV[b%ALF_CONV.length]).join('');};
+const codNorm=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const codFmt=s=>{const c=codNorm(s);return c.length===8?c.slice(0,4)+'-'+c.slice(4):c;};
+async function verConvite(v){
+const c=codNorm(v);ui.codigo=v;if(c.length!==8){ui.convite=null;const box=$('#conv-info');if(box)box.innerHTML='';return;}
+try{const s=await getDoc(doc(db,'convites',c));const d=s.exists()?s.data():null;
+ui.convite=d&&!d.usado&&d.expiraMs>Date.now()&&!d.cancelado?{...d,id:c}:null;
+const box=$('#conv-info'),er=$('#gestor-erro');if(box)box.innerHTML=infoConvite(ui.convite);
+if(er)er.textContent=ui.convite?'':d?(d.usado?'Este convite já foi usado.':'Este convite expirou ou foi cancelado. Peça um novo.'):'Código não encontrado. Confira as letras.';
+}catch(e){console.warn(e);}
+}
+async function fazerCadastroGestor(form,fd){
+const err=m=>{$('#gestor-erro').textContent=m;};
+const cod=codNorm(fd.get('codigo'));if(cod.length!==8)return err('Digite o código de convite (8 letras e números).');
+const usuario=normLogin(fd.get('usuario'));if(!/^[a-z0-9._-]{3,30}$/.test(usuario))return err('Usuário: de 3 a 30 letras, números, ponto, hífen ou sublinhado, sem espaço e sem @.');
+if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
+let cv;try{const s=await getDoc(doc(db,'convites',cod));cv=s.exists()?s.data():null;}catch(e){return err(erroFirebase(e));}
+if(!cv)return err('Código não encontrado. Confira as letras.');
+if(cv.usado)return err('Este convite já foi usado. Peça um novo ao gestor principal.');
+if(cv.cancelado||!(cv.expiraMs>Date.now()))return err('Este convite expirou ou foi cancelado. Peça um novo ao gestor principal.');
+const btn=form.querySelector('button.btn-pri');const rot=btn.textContent;btn.disabled=true;btn.textContent='Criando…';
+bootstrapping=true;let cred=null;const email=usuario+DOMF;
+try{
+cred=await createUserWithEmailAndPassword(auth,email,String(fd.get('senha')));
+const em=nowISO();const b=writeBatch(db);
+b.set(doc(db,'users',cred.user.uid),{grad:cv.grad||'',guerra:cv.guerra||'',nome:cv.nome||'',tipo:'cadete',email,usuario,perfil:'almox',ativo:true,pendente:false,
+vinculo:cv.cadeteId||'',convite:cod,convidadoPor:cv.criadoPor,criadoEm:em,lgpd:em,privacidade:{versao:PRIV_VER,em},romaneio:{}});
+b.update(doc(db,'convites',cod),{usado:true,usadoPor:cred.user.uid,usadoEm:em,usuario});
+await b.commit();
+bootstrapping=false;ui.convite=null;ui.codigo='';ui.telaLogin='almox';await aoMudarLogin(auth.currentUser);
+}catch(e){
+bootstrapping=false;console.error(e);
+if(cred){try{await cred.user.delete();}catch(x){}}
+err(e.code==='auth/email-already-in-use'?'Este usuário já existe. Escolha outro.':erroFirebase(e));btn.disabled=false;btn.textContent=rot;
 }
 }
 
@@ -356,7 +456,7 @@ return assinar+trf+minhas().filter(devAguardaMilitar).length;
 function cardCautela(c,admin){
 const u=user(c.userId);
 return `<button class="card clickable${atrasada(c)?' card-late':''}" data-act="ver" data-id="${c.id}" style="margin-bottom:.6rem">
-<div class="card-t"><div><span class="nr">${nr(c.num)}${c.origem==='balcao'?' · balcão':c.origem==='transferencia'?' · transferência':''}</span>
+<div class="card-t"><div><span class="nr">${nr(c.num)}${c.origem==='balcao'?' · balcão':c.origem==='transferencia'?' · transferência':c.origem==='importacao'?' · carga inicial':''}</span>${admin&&minhaVinc(c)?' <span class="tag">sua conta de cadete – outro gestor atende</span>':''}
 ${admin?`<p style="font-weight:600">${esc(nomeU(u))} <span class="small muted">${esc(turmaU(u))}</span></p>`:''}
 ${itensLi(c,c.status==='cautelada')}</div>${stamp(c)}</div>
 <dl class="meta">${c.status==='cautelada'||c.status==='separada'?`<dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'sem prazo definido'}</dd>`:''}<dt>${c.status==='solicitada'?'Pedido em':'Atualizado'}</dt><dd>${fmt(c.atualizadoEm||c.criadoEm)}</dd></dl></button>`;
@@ -367,11 +467,12 @@ const assinar=minhas().filter(c=>c.status==='separada'&&!c.assinatura);
 const aguard=minhas().filter(c=>c.status==='separada'&&c.assinatura);
 const trf=D.trfIn.filter(c=>c.transferPara===sess.userId&&c.transfer);
 const atras=minhas().filter(atrasada);
-assinar.forEach(c=>{h+=`<div class="pend-box"><p><b>Material separado para você – ${nr(c.num)}</b></p>${itensLi(c)}<p class="small muted">Vá ao almoxarifado e assine com o material na sua frente.</p><div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="assinar" data-id="${c.id}">Assinar recebimento</button><button class="btn" data-act="ver" data-id="${c.id}">Detalhes</button></div></div>`;});
-aguard.forEach(c=>{h+=`<div class="pend-box"><p><b>${nr(c.num)} assinada.</b> Aguarde o almoxarifado confirmar a entrega.</p></div>`;});
+assinar.forEach(c=>{h+=`<div class="pend-box"><p><b>Material separado para você – ${nr(c.num)}</b></p>${itensLi(c)}${naoAtTxt(c)}<p class="small muted">Vá ao almoxarifado e assine com o material na sua frente.</p><div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="assinar" data-id="${c.id}">Assinar recebimento</button><button class="btn" data-act="ver" data-id="${c.id}">Detalhes</button></div></div>`;});
+aguard.forEach(c=>{h+=`<div class="pend-box"><p><b>${nr(c.num)}: você assinou o recebimento.</b> Falta o gestor do almoxarifado assinar a entrega com a senha dele.</p></div>`;});
 trf.forEach(c=>{h+=`<div class="pend-box"><p><b>Transferência para você</b> – ${esc(nomeM(c.userId))} quer transferir:</p><ul class="itens">${(c.transfer.itens||[]).map(x=>{const l=c.itens[x.i]||{};return `<li><b>${x.qtd}×</b><span>${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}</span></li>`;}).join('')}</ul>
 <div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="aceitarTrf" data-id="${c.id}">Aceitar e assinar</button><button class="btn btn-warn" data-act="recusarTrf" data-id="${c.id}">Recusar</button></div></div>`;});
 minhas().filter(devAguardaMilitar).forEach(c=>{h+=`<div class="pend-box"><p><b>Devolução para assinar – ${nr(c.num)}</b></p><p>${esc(c.devPend.txt)}</p>${c.devPend.obs?`<p class="small">Obs.: ${esc(c.devPend.obs)}</p>`:''}<p class="small muted">Confira e assine a devolução do material ao almoxarifado.</p><div class="row" style="margin-top:.5rem"><button class="btn btn-pri" data-act="assinarDev" data-id="${c.id}">Assinar devolução</button><button class="btn" data-act="ver" data-id="${c.id}">Detalhes</button></div></div>`;});
+minhas().filter(c=>c.devSol&&!c.devPend).forEach(c=>{h+=`<div class="pend-box"><p><b>Devolução pedida – ${nr(c.num)}</b></p><p class="small">${esc(c.devSol.txt)}</p><p class="small muted">Leve o material ao almoxarifado. O gestor confere e assina para concluir.</p><div class="row" style="margin-top:.5rem"><button class="btn" data-act="ver" data-id="${c.id}">Detalhes</button></div></div>`;});
 minhas().filter(devAguardaAlmox).forEach(c=>{h+=`<div class="pend-box"><p><b>Devolução ${nr(c.num)} assinada.</b> Aguarde o almoxarifado concluir.</p></div>`;});
 atras.forEach(c=>{h+=`<div class="pend-box red"><p><b>${nr(c.num)} em atraso</b> – o prazo de devolução era ${fmtD(c.prazo)}. Procure o almoxarifado.</p></div>`;});
 const ativas=minhas().filter(c=>c.status==='cautelada');
@@ -384,22 +485,30 @@ h+=linhas.length?`<div class="card"><ul class="itens">${linhas.map(l=>`<li><b>${
 :`<div class="empty">Nenhum material cautelado em seu nome.<br><button class="btn btn-pri" style="margin-top:.7rem" data-act="go" data-v="sol">Solicitar material</button></div>`;
 if(andamento.length)h+=`<div class="sec-h"><h2>Pedidos em andamento</h2></div>`+andamento.map(c=>cardCautela(c)).join('');
 if(ativas.length)h+=`<div class="sec-h"><h2>Cautelas ativas</h2></div>`+ativas.map(c=>cardCautela(c)).join('');
-if(!dadosCompletos(u))h=boxCompletar()+h;
+if(!dadosCompletos(u)||!romaneioOk(u))h=boxCompletar(u)+h;
 return h;
 }
-const boxCompletar=()=>`<div class="aviso" style="margin-bottom:.8rem">Atualize seus dados e o <b>romaneio</b> quando puder: com as suas medidas o sistema já sugere o tamanho certo de cada peça. <button class="link" data-act="go" data-v="pf">Atualizar agora</button></div>`;
+const boxCompletar=u=>`<div class="aviso" style="margin-bottom:.8rem">${!dadosCompletos(u)?'Complete seu cadastro: <b>Companhia, pelotão, CPF, RG e telefone</b>.':''}${!romaneioOk(u)?' Preencha o <b>romaneio</b>: com as suas medidas o sistema sugere o tamanho certo de cada peça.':''} <button class="link" data-act="go" data-v="pf">Atualizar agora</button></div>`;
 /* Busca de material: aceita várias palavras, sem diferenciar acentos (ex.: "tunica chumbo p") */
 const casaBusca=(it,q)=>{const alvo=norm(it.nome+' '+cat(it.catId).nome+' '+(it.tamanhos||[]).join(' '));return norm(q).split(/\s+/).filter(Boolean).every(p=>alvo.includes(p));};
 const campoBusca=ph=>`<div class="busca-mat"><input class="i" type="search" data-inp="solQ" value="${esc(ui.solQ||'')}" placeholder="${ph}" autocomplete="off" enterkeyhint="search" aria-label="Pesquisar material">${ui.solQ?'<button type="button" class="busca-x" data-act="limparBusca" aria-label="Limpar pesquisa">×</button>':''}</div>`;
+function tamPadrao(it,u){
+const sug=sugTam(it,u);const tams=it.tamanhos||[];
+const esc1=(ui.tamSel||{})[it.id];if(esc1&&tams.includes(esc1))return esc1;
+if(sug&&livre(it,sug)>0)return sug;
+return tams.find(t=>livre(it,t)>0)||sug||tams[0];
+}
 function cardItemSol(it,u,comCat){
-const sug=sugTam(it,u);const sel=(ui.tamSel||{})[it.id]||sug||(it.tamanhos||[])[0];
-const unico=(it.tamanhos||[]).length<=1;
+const sug=sugTam(it,u);const sel=tamPadrao(it,u);
+const unico=(it.tamanhos||[]).length<=1;const algum=temLivre(it);
 const noCart=ui.cart.filter(x=>x.itemId===it.id).reduce((a,x)=>a+x.qtd,0);
-return `<div class="card" style="margin-bottom:.6rem"><div class="eq"><div>${comCat?`<p class="small muted">${esc(cat(it.catId).nome)}</p>`:''}<h3>${esc(it.nome)}</h3>
-<p class="avail">${it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'} · ${esc((UNID[it.unidade]||UNID.un)[0])}${it.campo&&!sug?` · <button class="link" data-act="go" data-v="pf">informe seu tamanho no romaneio</button>`:''}</p></div>
-<button class="btn btn-pri btn-sm" data-act="addCart" data-id="${it.id}">Adicionar</button></div>
-${unico?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=est(it,t).disp;return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" title="${d>0?'Disponível':'Sem estoque no momento'}">${esc(t)}${d>0?'':'<span class="se" aria-label="sem estoque">•</span>'}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).</p>`:''}`}
-${est(it,sel).disp<=0?`<p class="small c-brass" style="margin-top:.3rem">${unico?'Sem estoque no momento':'Tamanho '+esc(sel)+' sem estoque no momento'}: você pode pedir mesmo assim, e o almoxarifado avisa quando separar.</p>`:''}
+const noCartSel=ui.cart.filter(x=>x.itemId===it.id&&x.tam===sel).reduce((a,x)=>a+x.qtd,0);
+const lv=livre(it,sel);const pode=lv-noCartSel>0;
+return `<div class="card${algum?'':' sem-estq'}" style="margin-bottom:.6rem"><div class="eq"><div>${comCat?`<p class="small muted">${esc(cat(it.catId).nome)}</p>`:''}<h3>${esc(it.nome)}</h3>
+<p class="avail">${!algum?'<b class="c-stamp">Sem estoque no momento</b>':it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'}${algum?` · ${esc((UNID[it.unidade]||UNID.un)[0])}`:''}${algum&&it.campo&&!sug?` · <button class="link" data-act="go" data-v="pf">informe seu tamanho no romaneio</button>`:''}</p></div>
+<button class="btn btn-pri btn-sm" data-act="addCart" data-id="${it.id}" ${pode?'':'disabled'}>Adicionar</button></div>
+${unico||!algum?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=livre(it,t);return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" title="${d>0?d+' disponível(is)':'Sem estoque no momento'}" ${d>0?'':'disabled'}>${esc(t)}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).${livre(it,sug)>0?'':` <b class="c-stamp">Sem estoque do seu tamanho no momento.</b>`}</p>`:''}`}
+${algum&&lv>0?`<p class="small muted" style="margin-top:.3rem">${unico?'':'Tamanho '+esc(sel)+': '}${lv} disponível(is) para pedido</p>`:''}
 ${noCart?`<p class="small c-ok" style="margin-top:.3rem">${noCart} no pedido</p>`:''}</div>`;
 }
 function vSolicitar(){
@@ -424,8 +533,9 @@ h+=its.length?its.map(it=>cardItemSol(it,u,false)).join(''):'<div class="empty">
 return h;
 }
 function addCart(id){
-const it=item(id);const t=(ui.tamSel||{})[id]||sugTam(it,me())||(it.tamanhos||[])[0]||'Único';
-const x=ui.cart.find(c=>c.itemId===id&&c.tam===t);
+const it=item(id);const t=tamPadrao(it,me())||'Único';
+const x=ui.cart.find(c=>c.itemId===id&&c.tam===t);const ja=x?x.qtd:0;
+if(livre(it,t)<=ja){toast(livre(it,t)?`Só há ${livre(it,t)} disponível(is) de ${it.nome}${tamTxt(t)?' ('+t+')':''}.`:`${it.nome}${tamTxt(t)?' ('+t+')':''} está sem estoque no momento.`,true);return;}
 if(x){if(x.qtd>=5){toast('Máximo de 5 por item.',true);return;}x.qtd++;}else ui.cart.push({itemId:id,tam:t,qtd:1});
 toast(`${it.nome}${tamTxt(t)?' ('+t+')':''} adicionado.`);render();
 }
@@ -450,7 +560,16 @@ if(!ui.cart.length)return;
 const obs=String(($('#f-pedido [name=obs]')||{}).value||'').trim();
 const itens=ui.cart.map(x=>{const it=item(x.itemId);return {itemId:x.itemId,nome:it.nome,tam:x.tam,qtd:x.qtd,dev:0,trf:0,consumo:!!it.consumo,unidade:it.unidade||'un'};});
 try{
-await runTransaction(db,async tx=>{const num=await proxNumero(tx);const ref=doc(collection(db,'cautelas'));
+await runTransaction(db,async tx=>{
+const ids=[...new Set(itens.map(l=>l.itemId))];const sn={};
+for(const iid of ids){const d=(await tx.get(doc(db,'itens',iid))).data();if(!d||d.ativo===false)throw {msg:'Um dos itens saiu do catálogo. Revise o pedido.'};sn[iid]=d;}
+const falta=[];const novo={};
+ids.forEach(iid=>{const it=sn[iid];const r={...(it.reservado||{})};
+itens.filter(l=>l.itemId===iid).forEach(l=>{const lv=Math.max(0,est(it,l.tam).disp-int(r[l.tam]||0));if(lv<l.qtd)falta.push(`${it.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}: ${lv?'só '+lv+' disponível(is)':'sem estoque'}`);r[l.tam]=int(r[l.tam]||0)+l.qtd;});
+novo[iid]=r;});
+if(falta.length)throw {msg:'O estoque mudou: '+falta.join('; ')+'. Ajuste o pedido.'};
+const num=await proxNumero(tx);const ref=doc(collection(db,'cautelas'));
+ids.forEach(iid=>tx.update(doc(db,'itens',iid),{reservado:novo[iid]}));
 tx.set(ref,{num,userId:sess.userId,origem:'app',status:'solicitada',itens,obs,prazo:null,assinatura:null,transferPara:null,transfer:null,
 criadoEm:nowISO(),atualizadoEm:nowISO(),log:[entrada('Solicitada',obs)]});});
 ui.cart=[];closeModal();ui.view='ini';render();depoisDoModal(()=>marcarTela(true));toast('Pedido enviado ao almoxarifado.');
@@ -465,23 +584,24 @@ return `<div class="sec-h"><h2>Minhas cautelas</h2><span class="muted small">${l
 function vPerfil(){
 const u=me();const bio=temBioAqui();
 return `<div class="sec-h"><h2>Meus dados</h2></div>
-<p class="small muted" style="margin-bottom:.6rem">Preencha ou atualize quando quiser. Nada aqui é obrigatório para fazer pedidos, mas o romaneio ajuda o almoxarifado a separar o tamanho certo.</p>
+<p class="small muted" style="margin-bottom:.6rem">Mantenha seus dados atualizados. O romaneio ajuda o almoxarifado a separar o tamanho certo. Seus dados pessoais (CPF, RG, telefone) só são vistos por você e pelos gestores do almoxarifado – veja a ${linkPriv()}.</p>
 <div class="card stack"><dl class="dados-mil"><dt>Militar</dt><dd>${esc(nomeU(u))}</dd><dt>Nome</dt><dd>${esc(u.nome)}</dd><dt>E-mail</dt><dd>${esc(u.email)}</dd></dl>
 <p class="small muted">Para corrigir nome, graduação ou e-mail, procure o almoxarifado.</p></div>
 <form id="f-perfil" class="stack" style="margin-top:.8rem">
-<div class="card stack"><h3>Dados complementares</h3>${camposComp(u)}</div>
+<div class="card stack"><h3>Dados complementares</h3>${camposComp(u,u.tipo,false)}</div>
 <div class="card stack"><h3>Romaneio</h3><p class="small muted">Suas medidas. Use o número ou o tamanho que está na etiqueta da peça que você veste (ex.: 41, M, 56).</p>${camposRom(u)}</div>
 <p class="erro" id="pf-erro"></p><button class="btn btn-pri btn-block">Salvar meus dados</button></form>
 <div class="card stack" style="margin-top:.8rem"><h3>Assinatura</h3>
 ${bio?'<p class="pill ok">Digital / Face ID ativados neste aparelho</p>':bioOk?`<p class="small">Ative para assinar as cautelas com digital, Face ID ou a senha do celular.</p><button class="btn btn-pri" data-act="ativarBio">Ativar digital / Face ID neste aparelho</button>`:'<p class="small muted">Este aparelho não oferece digital/Face ID para sites. Assine com a senha.</p>'}
 <button class="btn" data-act="senha">Trocar minha senha</button></div>
 <div class="card stack" style="margin-top:.8rem"><h3>Aparência</h3>${seletorTema()}</div>
-<button class="btn btn-warn btn-block" style="margin-top:1rem" data-act="sair">Sair</button><p class="versao-app">${NOME} v${VERSAO}</p>`;
+<button class="btn btn-warn btn-block" style="margin-top:1rem" data-act="sair">Sair</button><p class="versao-app">${linkPriv()} · ${NOME} v${VERSAO}</p>`;
 }
 async function salvarPerfil(fd){
 const u=me();const d=lerDados(fd,u.tipo);
-const up={rg:d.rg||'',telefone:d.telefone||'',romaneio:d.romaneio||{},atualizadoEm:nowISO()};
-if(u.tipo==='oficial')up.opm=d.opm||'';else{up.pelotao=d.pelotao||'';up.ano=d.ano||'';up.turma=d.turma||'';}
+const falha=conferirDados(d,u.tipo,false);if(falha){$('#pf-erro').textContent=falha;return;}
+const up={rg:d.rg||'',telefone:d.telefone||'',cpf:d.cpf||'',emailPessoal:d.emailPessoal||'',romaneio:d.romaneio||{},atualizadoEm:nowISO()};
+if(u.tipo==='oficial')up.opm=d.opm||'';else{up.pelotao=d.pelotao||'';up.cia=d.cia||'';up.curso=d.curso||'';up.subturma=d.subturma||'';if(d.ano)up.ano=d.ano;}
 try{await updateDoc(doc(db,'users',u.id),up);toast('Dados salvos.');window.scrollTo(0,0);}
 catch(e){$('#pf-erro').textContent=erroFirebase(e);}
 }
@@ -500,37 +620,65 @@ catch(e){$('#senha-erro').textContent=(e.code==='auth/invalid-credential'||e.cod
 function verCautela(id){
 const c=C(id);if(!c)return;const u=user(c.userId);const adm=ehAlmox();const meu=c.userId===sess.userId;
 const a=c.assinatura;
-let acoes='';
-if(adm){
+let acoes='';const propria=adm&&minhaVinc(c);
+if(propria){}
+else if(adm){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="recusar" data-id="${c.id}">Recusar</button><button class="btn btn-pri" data-act="separar" data-id="${c.id}">Separar material</button>`;
 if(c.status==='separada'){acoes+=`<button class="btn btn-warn" data-act="cancelarSep" data-id="${c.id}">Cancelar e devolver ao estoque</button>`;
 acoes+=a?`<button class="btn btn-pri" data-act="entregar" data-id="${c.id}">Assinar e entregar</button>`:`<button class="btn btn-pri" data-act="assBalcao" data-id="${c.id}">Assinar no balcão (senha do militar)</button>`;}
 if(c.status==='cautelada'&&c.devPend)acoes+=`<button class="btn btn-warn" data-act="cancelarDev" data-id="${c.id}">Cancelar devolução</button>`+(c.devAss?`<button class="btn btn-pri" data-act="assDevAlmox" data-id="${c.id}">Assinar e concluir devolução</button>`:`<button class="btn" data-act="assDevBalcao" data-id="${c.id}">Militar assina aqui (senha)</button>`);
-else if(c.status==='cautelada'&&pendentes(c).length)acoes+=`<button class="btn" data-act="prazo" data-id="${c.id}">Prazo</button><button class="btn btn-pri" data-act="devolver" data-id="${c.id}">Registrar devolução</button>`;
+else if(c.status==='cautelada'&&pendentes(c).length)acoes+=`<button class="btn" data-act="prazo" data-id="${c.id}">Prazo</button><button class="btn btn-pri" data-act="devolver" data-id="${c.id}">${c.devSol?'Conferir devolução pedida':'Registrar devolução'}</button>`;
 }else if(meu){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="cancelarPedido" data-id="${c.id}">Cancelar pedido</button>`;
 if(c.status==='separada'&&!a)acoes+=`<button class="btn btn-pri" data-act="assinar" data-id="${c.id}">Assinar recebimento</button>`;
 if(devAguardaMilitar(c))acoes+=`<button class="btn btn-pri" data-act="assinarDev" data-id="${c.id}">Assinar devolução</button>`;
 else if(c.status==='cautelada'&&c.devPend){}
-else if(c.status==='cautelada'&&pendentes(c).length)acoes+=c.transferPara?`<button class="btn btn-warn" data-act="desistirTrf" data-id="${c.id}">Desistir da transferência</button>`:`<button class="btn btn-pri" data-act="transferir" data-id="${c.id}">Transferir para outro militar</button>`;
+else if(c.status==='cautelada'&&c.devSol)acoes+=`<button class="btn btn-warn" data-act="cancelarPedDev" data-id="${c.id}">Cancelar pedido de devolução</button>`;
+else if(c.status==='cautelada'&&pendentes(c).length)acoes+=c.transferPara?`<button class="btn btn-warn" data-act="desistirTrf" data-id="${c.id}">Desistir da transferência</button>`:`<button class="btn" data-act="pedirDev" data-id="${c.id}">Devolver material</button><button class="btn btn-pri" data-act="transferir" data-id="${c.id}">Transferir</button>`;
 }
 if(c.assinatura)acoes=`<button class="btn" data-act="termo" data-id="${c.id}">Termo de cautela (PDF)</button>`+acoes;
-openModal(`Cautela ${nr(c.num)}`,`<div class="ficha">${stamp(c,true)}<p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>
+openModal(`Cautela ${nr(c.num)}`,`${propria?'<p class="aviso" style="margin-bottom:.7rem">Esta cautela é da <b>sua conta de cadete</b>. Por segurança, outro gestor do almoxarifado faz a separação, a entrega e a devolução.</p>':''}<div class="ficha">${stamp(c,true)}<p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>
 ${itensLi(c)}
 <dl class="meta"><dt>Origem</dt><dd>${c.origem==='balcao'?'Cautela no balcão':c.origem==='transferencia'?`Transferência de ${esc(nomeM(c.deUser))} (${nr(c.deNum)})`:'Pedido pelo app'}</dd>
 ${c.status!=='solicitada'?`<dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'sem prazo definido'}</dd>`:''}
-${a?`<dt>Assinatura do militar</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>`:''}
-${c.assinaturaAlmox?`<dt>Assinatura do almoxarifado</dt><dd>${esc(nomeM(c.assinaturaAlmox.por))}, ${fmt(c.assinaturaAlmox.em)}, ${esc(FORMA_ALM[c.assinaturaAlmox.metodo]||c.assinaturaAlmox.metodo)}</dd>`:''}
+${a?`<dt>Assinatura do militar</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>`:c.status==='separada'?'<dt>Assinatura do militar</dt><dd class="c-brass">pendente</dd>':''}
+${c.assinaturaAlmox?`<dt>Assinatura do almoxarifado</dt><dd>${esc(nomeM(c.assinaturaAlmox.por))}, ${fmt(c.assinaturaAlmox.em)}, ${esc(FORMA_ALM[c.assinaturaAlmox.metodo]||c.assinaturaAlmox.metodo)}</dd>`:c.status==='separada'?`<dt>Assinatura do almoxarifado</dt><dd class="c-brass">pendente${a?'':' (depois da assinatura do militar)'}</dd>`:''}
 ${c.obs?`<dt>Obs.</dt><dd>${esc(c.obs)}</dd>`:''}
+${(c.naoAtendidos||[]).length?`<dt>Não atendido</dt><dd class="c-stamp">${c.naoAtendidos.map(x=>`${x.qtd}× ${esc(x.nome)}${tamTxt(x.tam)?' ('+esc(x.tam)+')':''}`).join(', ')} – sem estoque</dd>`:''}
 ${c.transferPara?`<dt>Transferência</dt><dd>oferecida a ${esc(nomeM(c.transferPara))}, aguardando aceite</dd>`:''}
+${c.devSol&&!c.devPend?`<dt>Devolução</dt><dd>pedida pelo militar em ${fmt(c.devSol.em)}: ${esc(c.devSol.txt)}${c.devSol.obs?' – '+esc(c.devSol.obs):''}<br><b>aguardando a conferência do almoxarifado</b></dd>`:''}
 ${c.devPend?`<dt>Devolução</dt><dd>${esc(c.devPend.txt)}${c.devPend.obs?' – '+esc(c.devPend.obs):''}<br><b>${c.devAss?'assinada pelo militar – aguardando o almoxarifado':'aguardando a assinatura do militar'}</b></dd>`:''}</dl></div>
 ${(c.ocorrencias||[]).length?`<div class="sec-h"><h3>Ocorrências na devolução</h3></div><ul class="feed">${c.ocorrencias.map(o=>`<li>${o.qtd}× ${esc(o.nome)}${tamTxt(o.tam)?' ('+esc(o.tam)+')':''} – <b class="c-stamp">${esc(o.estado)}</b>${o.obs?' – '+esc(o.obs):''}<time>${fmt(o.t)}</time></li>`).join('')}</ul>`:''}
 ${(c.devolucoes||[]).length?`<div class="sec-h"><h3>Devoluções assinadas (descautela)</h3></div><ul class="feed">${c.devolucoes.map(d=>`<li><b>${esc(d.material)}</b>${d.obs?'<br><span class="small">'+esc(d.obs)+'</span>':''}<br><span class="small">Assinada por ${esc(nomeM(d.militar.por))} (militar) e por ${esc(nomeM(d.almox.por))} (almoxarifado)</span><time>${fmt(d.em)}</time></li>`).join('')}</ul>`:''}
 <div class="sec-h"><h3>Histórico</h3></div><ul class="feed">${(c.log||[]).slice().reverse().map(x=>`<li><b>${esc(x.a)}</b> – ${esc(nomeM(x.por))}${x.obs?`<br><span class="small">${esc(x.obs)}</span>`:''}<time>${fmt(x.t)}</time></li>`).join('')}</ul>`,acoes);
 }
+/* Aceite da Política de Privacidade (pedido de novo a quem ainda não aceitou a versão atual) */
+function pedirAceitePriv(){
+const u=me();if(!u||(u.privacidade&&u.privacidade.versao===PRIV_VER)||modal.open)return;
+openModal('Política de Privacidade',`<form id="f-priv" class="stack"><p>O ${NOME} guarda seus dados pessoais (identificação, CPF, RG, contato, Companhia, romaneio, cautelas e assinaturas eletrônicas) só para o controle de cautela do almoxarifado da EsFO.</p>
+<p>Antes de continuar, leia a ${linkPriv()}.</p>
+<label class="check"><input type="checkbox" name="ok" required><span>Li a Política de Privacidade e autorizo o uso dos meus dados para o controle de cautela de materiais do almoxarifado da EsFO.</span></label>
+<p class="erro" id="priv-erro"></p><button class="btn btn-pri btn-block">Continuar</button><button type="button" class="btn btn-block" data-act="sair">Agora não (sair)</button></form>`);
+}
+async function aceitarPriv(){
+const u=me();try{await updateDoc(doc(db,'users',u.id),{privacidade:{versao:PRIV_VER,em:nowISO()}});closeModal();toast('Obrigado. Aceite registrado.');}
+catch(e){$('#priv-erro').textContent=erroFirebase(e);}
+}
+/* Libera a reserva das peças de um pedido (dentro de uma transação, depois das leituras) */
+async function lerItensTx(tx,ids){const sn={};for(const iid of ids){const r=await tx.get(doc(db,'itens',iid));if(r.exists())sn[iid]=r.data();}return sn;}
+function liberarReservaTx(tx,sn,linhas){
+const ids=[...new Set(linhas.map(l=>l.itemId))];
+ids.forEach(iid=>{const it=sn[iid];if(!it)return;const r={...(it.reservado||{})};
+linhas.filter(l=>l.itemId===iid).forEach(l=>{r[l.tam]=Math.max(0,int(r[l.tam]||0)-l.qtd);if(!r[l.tam])delete r[l.tam];});
+it.reservado=r;tx.update(doc(db,'itens',iid),{reservado:r});});
+}
 async function cancelarPedido(id){
 const c=C(id);if(!c||c.status!=='solicitada')return;
-try{await updateDoc(doc(db,'cautelas',id),{status:'cancelada',log:[...(c.log||[]),entrada('Cancelada pelo militar')]});closeModal();toast('Pedido cancelado.');}
+try{await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',id);const o=(await tx.get(cref)).data();
+if(!o||o.status!=='solicitada')throw {msg:'Este pedido já foi atendido ou mudou de situação.'};
+const sn=await lerItensTx(tx,[...new Set(o.itens.map(l=>l.itemId))]);liberarReservaTx(tx,sn,o.itens);
+tx.update(cref,{status:'cancelada',log:[...(o.log||[]),entrada('Cancelada pelo militar')]});});
+closeModal();toast('Pedido cancelado.');}
 catch(e){toast(erroFirebase(e),true);}
 }
 
@@ -599,31 +747,79 @@ closeModal();toast('Recebimento assinado. O almoxarifado vai confirmar a entrega
 }
 
 /* ============ Transferência de cautela entre militares ============ */
-function transferir(id){
-const c=C(id);if(!c||c.status!=='cautelada'||c.transferPara)return;
-const lista=D.dir.filter(u=>u.id!==sess.userId);
-const linhas=(c.itens||[]).map((l,i)=>({l,i})).filter(x=>pend(x.l)>0);
-openModal('Transferir material – '+nr(c.num),`<form id="f-trf" data-id="${c.id}" class="stack">
-<label class="f"><span>Para quem?</span><input class="i" data-inp="trfq" id="trf-q" placeholder="Digite o nome de guerra ou o pelotão" autocomplete="off"></label>
-<div class="dir-lista" id="trf-dir">${lista.map(u=>`<label data-busca="${esc(norm(nomeU(u)+' '+(u.nome||'')+' '+turmaU(u)))}"><input type="radio" name="para" value="${u.id}" required><span>${esc(nomeU(u))} <span class="small muted">${esc(turmaU(u))}</span></span></label>`).join('')||'<p class="muted small" style="padding:.6rem">Nenhum militar disponível.</p>'}</div>
-<div><span class="sep-lbl">O que transferir</span><ul class="trf-lista">${linhas.map(({l,i})=>`<li><span class="nm">${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}</span><input class="i q" type="number" min="0" max="${pend(l)}" value="${pend(l)}" name="q${i}" data-i="${i}"><span class="small muted">de ${pend(l)}</span></li>`).join('')}</ul></div>
-<p class="small muted">O outro militar precisa aceitar e assinar no celular dele. Até lá, o material continua em seu nome.</p>
-<p class="erro" id="trf-erro"></p><button class="btn btn-pri btn-block">Continuar para assinatura</button></form>`);
+/* Lista "Marque só o que vai…" (mesmo modelo do SICAM): uma caixa por item; quantidade ajustável quando há mais de uma peça */
+function listaMarcar(c,p,acao){
+const ls=(c.itens||[]).map((l,i)=>({l,i})).filter(x=>pend(x.l)>0);const um=ls.length===1;
+return `<div><div class="row between"><p class="small"><b>Marque só o que vai ${acao}</b></p>${ls.length>1?`<button type="button" class="link small" data-act="marcarTodos" data-f="${p}">Marcar todos</button>`:''}</div>
+<ul class="trf-lista">${ls.map(({l,i})=>{const q=pend(l);return `<li><input type="checkbox" name="${p}c" value="${i}" id="${p}c${i}" ${um?'checked':''}><label for="${p}c${i}"><b>${esc(l.nome)}</b>${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}<br><span class="small muted">com você: ${qtdU(q,l.unidade)}</span></label>${q>1?`<input class="i q" type="number" inputmode="numeric" min="1" max="${q}" name="${p}q${i}" value="${q}" aria-label="Quantidade">`:''}</li>`;}).join('')}</ul>
+${ls.some(x=>pend(x.l)>1)?`<p class="small muted" style="margin-top:.3rem">Quando houver mais de uma peça, ajuste a quantidade.</p>`:''}</div>`;
 }
-function filtrarTrf(v){const q=norm(v);$$('#trf-dir label').forEach(l=>{l.hidden=!!q&&!l.dataset.busca.includes(q);});}
+function lerMarcados(c,fd,p){
+const out=[];for(const i of fd.getAll(p+'c').map(Number)){const l=(c.itens||[])[i];if(!l)continue;const max=pend(l);
+const q=fd.get(p+'q'+i)!=null?int(fd.get(p+'q'+i)):max;if(q<1||q>max)return {erro:`${l.nome}: informe de 1 a ${max}.`};out.push({i,qtd:q});}
+return {itens:out};
+}
+/* Destinos da transferência: lista suspensa como no SICAM, agrupada por Companhia */
+function opcoesDestino(){
+const eu=me();const lista=D.dir.filter(u=>u.id!==sess.userId&&u.id!==(eu&&eu.vinculo||''));
+const grupos=[...CIAS,['__of','Oficiais'],['__','Sem Companhia informada']];
+const g=u=>u.tipo==='oficial'?'__of':(u.cia||'__');
+return grupos.map(([k,n])=>{const us=lista.filter(u=>g(u)===k).sort((a,b)=>nomeU(a).localeCompare(nomeU(b),'pt-BR'));
+if(!us.length)return '';return `<optgroup label="${esc(n)}">${us.map(u=>`<option value="${u.id}">${esc(nomeU(u))} – ${esc(u.tipo==='oficial'?(u.opm||'oficial'):[u.subturma,u.pelotao].filter(Boolean).join(' · ')||ciaTxt(u)||'—')}</option>`).join('')}</optgroup>`;}).join('');
+}
+function transferir(id){
+const c=C(id);if(!c||c.status!=='cautelada'||c.userId!==sess.userId)return;
+if(c.transferPara){toast(`Já existe uma transferência para ${nomeM(c.transferPara)} aguardando aceite.`,true);return;}
+if(c.devSol||c.devPend){toast('Há uma devolução em andamento nesta cautela.',true);return;}
+const ops=opcoesDestino();
+openModal('Transferir cautela – '+nr(c.num),`<form id="f-trf" data-id="${c.id}" class="stack" autocomplete="off">
+${listaMarcar(c,'t','transferir')}
+<label class="f"><span>Transferir para</span><select class="i" name="dest" required><option value="">Selecione o cadete…</option>${ops}</select></label>
+${ops?'':'<p class="small muted">Nenhum militar disponível para receber.</p>'}
+<p class="small muted">Depois você assina o pedido. O colega recebe no celular dele e precisa <b>aceitar e assinar</b>. Até lá, o material continua sob sua responsabilidade. O prazo de devolução continua o mesmo (${c.prazo?fmtD(c.prazo):'sem prazo definido'}).</p>
+<p class="erro" id="trf-erro"></p><button class="btn btn-pri btn-block">Continuar para assinar</button></form>`);
+}
 function confirmarTransf(form,fd){
-const c=C(form.dataset.id);if(!c)return;
-const para=String(fd.get('para')||'');if(!para){$('#trf-erro').textContent='Escolha o militar que vai receber.';return;}
-const itens=$$('#f-trf input.q').map(x=>({i:+x.dataset.i,qtd:Math.min(int(x.value),pend(c.itens[+x.dataset.i]))})).filter(x=>x.qtd>0);
-if(!itens.length){$('#trf-erro').textContent='Escolha pelo menos uma peça.';return;}
-const d=D.dir.find(u=>u.id===para)||{};
+const c=C(form.dataset.id);if(!c)return;const err=m=>{$('#trf-erro').textContent=m;};
+const r=lerMarcados(c,fd,'t');if(r.erro)return err(r.erro);const itens=r.itens;
+if(!itens.length)return err('Marque ao menos um item para transferir.');
+const para=String(fd.get('dest')||'');const d=D.dir.find(u=>u.id===para);
+if(!d||para===sess.userId)return err('Escolha o cadete que vai receber.');
 const txt=itens.map(x=>{const l=c.itens[x.i];return `${x.qtd}× ${l.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}`;}).join(', ');
-pedirAssinatura({titulo:'Assinar transferência',rotulo:'Assinar',corpo:`<div class="ficha"><p>De <b>${esc(nomeM(c.userId))}</b> para <b>${esc(nomeU(d))}</b></p><p>${esc(txt)}</p></div>
-<p class="aviso">Declaro que entreguei o material acima a ${esc(nomeU(d))}. A responsabilidade só passa para ele(a) depois do aceite.</p>`,
+pedirAssinatura({titulo:'Assinar pedido de transferência',rotulo:'Assinar pedido',corpo:`<div class="ficha"><p>Para <b>${esc(nomeU(d))}</b></p><ul class="itens">${itens.map(x=>{const l=c.itens[x.i];return `<li><b>${x.qtd}×</b><span>${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''}</span></li>`;}).join('')}</ul></div>
+<p class="aviso">Solicito a transferência do material acima. Ele continua sob minha responsabilidade até ${esc(nomeU(d))} aceitar e assinar o recebimento.</p>`,
 dados:em=>`ALMOX ESFO | Transferência | Cautela ${nr(c.num)} | De ${nomeM(c.userId)} para ${nomeU(d)} | ${txt} | ${em}`,
-onOk:async ass=>{const cc=C(c.id);if(!cc||cc.status!=='cautelada'||cc.transferPara)throw {msg:'Esta cautela mudou de situação.'};
+onOk:async ass=>{const cc=C(c.id);if(!cc||cc.status!=='cautelada'||cc.transferPara||cc.devSol||cc.devPend)throw {msg:'Esta cautela mudou de situação.'};
 await updateDoc(doc(db,'cautelas',c.id),{transferPara:para,transfer:{para,itens,em:ass.em,assinatura:ass},log:[...(cc.log||[]),{t:ass.em,a:'Transferência oferecida',por:sess.userId,obs:`Para ${nomeU(d)}: ${txt}`}]});
-closeModal();toast('Transferência enviada. Aguarde o aceite.');}});
+closeModal();toast(`Pedido enviado a ${nomeU(d)}. Ele precisa aceitar e assinar no celular dele.`);}});
+}
+/* Devolução pedida pelo próprio militar no app (assinada por ele). No balcão, o gestor confere e assina. */
+function pedirDev(id){
+const c=C(id);if(!c||c.status!=='cautelada'||c.userId!==sess.userId)return;
+if(c.transferPara){toast('Desista da transferência antes de pedir a devolução.',true);return;}
+if(c.devSol||c.devPend){toast('Já existe uma devolução em andamento nesta cautela.',true);return;}
+openModal('Devolver material – '+nr(c.num),`<form id="f-peddev" data-id="${c.id}" class="stack" autocomplete="off">
+${listaMarcar(c,'d','devolver')}
+<label class="f"><span>Observação (opcional)</span><input class="i" name="obs" placeholder="Ex.: botão da túnica solto"></label>
+<p class="small muted">Depois você assina o pedido e leva o material ao almoxarifado. O gestor confere e <b>assina com a senha dele</b>. Se a conferência bater com o seu pedido, não precisa assinar de novo. Até a conclusão, o material continua sob sua responsabilidade.</p>
+<p class="erro" id="peddev-erro"></p><button class="btn btn-pri btn-block">Continuar para assinar</button></form>`);
+}
+function confirmarPedDev(form,fd){
+const c=C(form.dataset.id);if(!c)return;const err=m=>{$('#peddev-erro').textContent=m;};
+const r=lerMarcados(c,fd,'d');if(r.erro)return err(r.erro);
+if(!r.itens.length)return err('Marque ao menos um item para devolver.');
+const mov=r.itens.map(x=>({i:x.i,q:x.qtd,e:'bom'}));const txt=devTxt(c,mov);const obs=String(fd.get('obs')||'').trim();
+pedirAssinatura({titulo:'Assinar pedido de devolução',rotulo:'Assinar pedido',corpo:`<div class="ficha"><p style="font-weight:600">${esc(nomeM(c.userId))}</p><p>${esc(txt)}</p>${obs?`<p class="small">Obs.: ${esc(obs)}</p>`:''}</div>
+<p class="aviso">Declaro que devolvo ao almoxarifado da EsFO o material acima. Se o gestor conferir o material sem diferença, esta assinatura vale como a minha assinatura da devolução.</p>`,
+dados:em=>`ALMOX ESFO | Devolução (descautela) – pedido do militar | Cautela ${nr(c.num)} | Devolvido por ${nomeM(c.userId)} | Material: ${txt}${obs?' | Obs.: '+obs:''} | ${em}`,
+onOk:async ass=>{const cc=C(c.id);if(!cc||cc.status!=='cautelada'||cc.transferPara||cc.devSol||cc.devPend)throw {msg:'Esta cautela mudou de situação.'};
+await updateDoc(doc(db,'cautelas',c.id),{devSol:{mov,txt,obs,em:ass.em,assinatura:ass},log:[...(cc.log||[]),{t:ass.em,a:'Devolução pedida pelo militar',por:sess.userId,obs:txt+(obs?' | '+obs:'')+' | '+(FORMA[ass.metodo]||ass.metodo)}]});
+closeModal();toast('Pedido de devolução assinado. Leve o material ao almoxarifado.');}});
+}
+async function cancelarPedDev(id){
+const c=C(id);if(!c||!c.devSol)return;if(!confirm('Cancelar o pedido de devolução?'))return;
+try{await updateDoc(doc(db,'cautelas',id),{devSol:null,log:[...(c.log||[]),entrada('Pedido de devolução cancelado pelo militar')]});closeModal();toast('Pedido de devolução cancelado.');}
+catch(e){toast(erroFirebase(e),true);}
 }
 async function desistirTrf(id){
 const c=C(id);if(!c||!c.transferPara)return;
@@ -668,13 +864,13 @@ const cauteladoDe=(itemId,tam)=>ativasA().reduce((a,c)=>a+(c.itens||[]).filter(l
 const separadoDe=(itemId,tam)=>separadas().reduce((a,c)=>a+(c.itens||[]).filter(l=>l.itemId===itemId&&l.tam===tam).reduce((b,l)=>b+l.qtd,0),0);
 function vAdmin(){
 const v=ui.view||'painel';const u=me();
-const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length],['uso','Cautelas',ativasA().filter(c=>atrasada(c)||devAguardaAlmox(c)).length],
+const nav=[['painel','Painel',0],['pedidos','Pedidos',solicitadas().length+separadas().filter(c=>c.assinatura).length+ativasA().filter(c=>c.devSol&&!c.devPend).length],['uso','Cautelas',ativasA().filter(c=>atrasada(c)||devAguardaAlmox(c)).length],
 ['material','Material',0],['militares','Militares',pendCad().length],['hist','Histórico',0],['rel','Relatórios',0]];
 const corpo=v==='pedidos'?vPedidos():v==='uso'?vEmUso():v==='material'?vMaterial():v==='militares'?vMilitares():v==='hist'?vHist():v==='rel'?vRelatorios():vPainel();
 return `<div class="shell"><aside class="side"><div class="brand"><img class="seal-img" src="brasao-esfo.png" alt="Brasão da EsFO"><div><h1>${NOME}</h1><p>Almoxarifado</p></div></div>
 ${nav.map(([k,l,b])=>`<button class="nav-b" data-act="go" data-v="${k}" ${v===k?'aria-current="page"':''}><span>${l}</span>${b?`<span class="badge${k==='uso'?' red':''}">${b}</span>`:''}</button>`).join('')}
 <button class="nav-b" data-act="balcao"><span>+ Cautela no balcão</span></button>
-<div class="foot"><div class="who">${esc(nomeU(u))}</div>${seletorTema()}<button class="nav-b" data-act="senha">Trocar senha</button><button class="nav-b" data-act="sair">Sair</button></div></aside>
+<div class="foot"><div class="who">${esc(nomeU(u))}</div>${seletorTema()}<button class="nav-b" data-act="senha">Trocar senha</button><button class="nav-b" data-act="sair">Sair</button><p class="versao-app" style="color:inherit;opacity:.75">${linkPriv()} · v${VERSAO}</p></div></aside>
 <main class="a-main">${corpo}</main></div>`;
 }
 function vPainel(){
@@ -686,7 +882,8 @@ let h=`<div class="a-head"><div><h1>Painel</h1><p>${new Date().toLocaleDateStrin
 <button class="kpi" data-act="go" data-v="uso"><strong>${pecas}</strong><span>Peças em uso (${uso.length} cautelas)</span></button>
 <button class="kpi ${atr.length?'alert':''}" data-act="go" data-v="uso"><strong>${atr.length}</strong><span>Cautelas em atraso</span></button></div>`;
 if(D.setup&&D.setup.seed&&!D.setup.seeded)h+=`<div class="pend-box"><p>Carregando o catálogo inicial…</p></div>`;
-const dvA=uso.filter(devAguardaAlmox),dvM=uso.filter(devAguardaMilitar);
+const dvA=uso.filter(devAguardaAlmox),dvM=uso.filter(devAguardaMilitar),dvS=uso.filter(c=>c.devSol&&!c.devPend);
+dvS.forEach(c=>{h+=`<div class="pend-box"><div class="row between"><p><b>Devolução pedida pelo app – ${nr(c.num)}</b> · ${esc(nomeM(c.userId))}${minhaVinc(c)?' <span class="tag">sua conta de cadete</span>':''}<br><span class="small">${esc(c.devSol.txt)}</span></p>${minhaVinc(c)?'':`<button class="btn btn-sm btn-pri" data-act="devolver" data-id="${c.id}">Conferir</button>`}</div></div>`;});
 dvA.forEach(c=>{h+=`<div class="pend-box"><div class="row between"><p><b>Devolução assinada pelo militar – ${nr(c.num)}</b> · ${esc(nomeM(c.userId))}<br><span class="small">${esc(c.devPend.txt)}</span></p><button class="btn btn-sm btn-pri" data-act="assDevAlmox" data-id="${c.id}">Assinar e concluir</button></div></div>`;});
 if(dvM.length)h+=`<div class="pend-box"><p><b>${dvM.length} devolução(ões) aguardando a assinatura do militar:</b> ${dvM.map(c=>`<button class="link" data-act="ver" data-id="${c.id}">${nr(c.num)} – ${esc(nomeM(c.userId))}</button>`).join(', ')}</p></div>`;
 if(pc.length)h+=`<div class="pend-box"><div class="row between"><p><b>${pc.length} cadastro(s) aguardando liberação</b></p><button class="btn btn-sm" data-act="go" data-v="militares">Ver</button></div></div>`;
@@ -697,11 +894,13 @@ h+=`<div class="two"><div><div class="col-h"><h3>Pedidos novos</h3><span class="
 return h;
 }
 function vPedidos(){
-const sol=solicitadas(),sep=separadas();
+const sol=solicitadas(),sep=separadas(),dev=ativasA().filter(c=>c.devSol&&!c.devPend);
 return `<div class="a-head"><div><h1>Pedidos</h1><p>Separe o material, o militar assina no celular e você confirma a entrega.</p></div><button class="btn btn-pri" data-act="balcao">+ Cautela no balcão</button></div>
 <div class="cols"><div class="col"><div class="col-h"><h3>1. Novos</h3><span class="badge">${sol.length}</span></div>${sol.map(c=>cardCautela(c,true)).join('')||'<div class="empty">Nenhum.</div>'}</div>
 <div class="col"><div class="col-h"><h3>2. Aguardando assinatura</h3><span class="badge">${sep.filter(c=>!c.assinatura).length}</span></div>${sep.filter(c=>!c.assinatura).map(c=>cardCautela(c,true)).join('')||'<div class="empty">Nenhum.</div>'}</div>
-<div class="col"><div class="col-h"><h3>3. Assinados – entregar</h3><span class="badge">${sep.filter(c=>c.assinatura).length}</span></div>${sep.filter(c=>c.assinatura).map(c=>cardCautela(c,true)).join('')||'<div class="empty">Nenhum.</div>'}</div></div>`;
+<div class="col"><div class="col-h"><h3>3. Assinados – entregar</h3><span class="badge">${sep.filter(c=>c.assinatura).length}</span></div>${sep.filter(c=>c.assinatura).map(c=>cardCautela(c,true)).join('')||'<div class="empty">Nenhum.</div>'}</div></div>
+<div class="sec-h" style="margin-top:1.2rem"><h2>Devoluções pedidas pelo app</h2><span class="badge">${dev.length}</span></div>
+${dev.map(c=>cardCautela(c,true)).join('')||'<div class="empty">Nenhuma devolução pedida.</div>'}`;
 }
 function vEmUso(){
 const q=norm(ui.q);
@@ -717,16 +916,16 @@ ${l.map(c=>`<tr class="hov" data-act="ver" data-id="${c.id}"><td class="mono">${
 }
 
 /* ----- Separação de um pedido ----- */
-function opcoesTam(it,sel){return (it.tamanhos||[]).map(t=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)} – ${est(it,t).disp} disp.</option>`).join('');}
+function opcoesTam(it,sel){return (it.tamanhos||[]).map(t=>{const r=resv(it,t);return `<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)} – ${est(it,t).disp} na prateleira${r?` (${r} reservado${r>1?'s':''})`:''}</option>`;}).join('');}
 function separar(id){
 const c=C(id);if(!c||c.status!=='solicitada')return;const u=user(c.userId);
 openModal('Separar '+nr(c.num),`<form id="f-sep" data-id="${c.id}" class="stack">
 <div class="ficha"><p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>${c.obs?`<p class="small">Obs.: ${esc(c.obs)}</p>`:''}
 ${u.romaneio&&Object.keys(u.romaneio).length?`<p class="small" style="margin-top:.4rem">Romaneio: ${Object.entries(u.romaneio).map(([k,v])=>esc((ROMN[k]||k).split(' ')[0])+' '+esc(v)).join(' · ')}</p>`:''}</div>
 <div><span class="sep-lbl">Confira tamanho e quantidade de cada peça</span>
-${(c.itens||[]).map((l,i)=>{const it=item(l.itemId);return `<div class="linha-item"><span class="nm">${esc(l.nome)}</span>
-${(it.tamanhos||[]).length>1?`<select class="i" name="t${i}">${opcoesTam(it,l.tam)}</select>`:`<span class="small muted">${est(it,l.tam).disp} disp.</span>`}
-<input class="i" type="number" name="q${i}" min="0" max="20" value="${l.qtd}" aria-label="Quantidade"><span class="small muted">0 = retirar</span></div>`;}).join('')}</div>
+${(c.itens||[]).map((l,i)=>{const it=item(l.itemId);const d=est(it,l.tam).disp;const q=Math.min(l.qtd,Math.max(0,d));return `<div class="linha-item${q<l.qtd?' falta':''}"><span class="nm">${esc(l.nome)} <span class="small muted">(pediu ${l.qtd}${tamTxt(l.tam)?' – '+esc(l.tam):''})</span>${q<l.qtd?`<br><span class="small c-stamp">${d>0?'Só '+d+' na prateleira':'Sem estoque'}: ${q?'separe o que houver':'não será separado'} – o militar é avisado.</span>`:''}</span>
+${(it.tamanhos||[]).length>1?`<select class="i" name="t${i}">${opcoesTam(it,l.tam)}</select>`:`<span class="small muted">${d} na prateleira</span>`}
+<input class="i" type="number" name="q${i}" min="0" max="20" value="${q}" aria-label="Quantidade"><span class="small muted">0 = não atendido</span></div>`;}).join('')}</div>
 <label class="f"><span>Prazo de devolução (opcional)</span><input class="i" type="date" name="prazo"></label>
 <label class="f"><span>Observação (opcional)</span><input class="i" name="obs"></label>
 <p class="erro" id="sep-erro"></p></form>`,
@@ -734,10 +933,13 @@ ${(it.tamanhos||[]).length>1?`<select class="i" name="t${i}">${opcoesTam(it,l.ta
 }
 async function confirmarSep(id){
 const c=C(id);const f=$('#f-sep');if(!c||!f)return;const fd=new FormData(f);
-const linhas=(c.itens||[]).map((l,i)=>({...l,tam:fd.get('t'+i)!=null?String(fd.get('t'+i)):l.tam,qtd:int(fd.get('q'+i))})).filter(l=>l.qtd>0);
-if(!linhas.length){$('#sep-erro').textContent='Nenhuma peça para separar. Para negar o pedido, use "Recusar".';return;}
+const todas=(c.itens||[]).map((l,i)=>({...l,tam:fd.get('t'+i)!=null?String(fd.get('t'+i)):l.tam,qtd:Math.max(0,int(fd.get('q'+i))),pedido:l.qtd,tamPedido:l.tam}));
+const linhas=todas.filter(l=>l.qtd>0).map(({pedido,tamPedido,...l})=>l);
+if(!linhas.length){$('#sep-erro').textContent='Nenhuma peça para separar. Para negar o pedido, use "Recusar" e explique o motivo.';return;}
+const naoAt=todas.filter(l=>l.qtd<l.pedido).map(l=>({nome:l.nome,tam:l.tamPedido,qtd:l.pedido-l.qtd}));
 const prazo=prazoDe(fd.get('prazo'));const obs=String(fd.get('obs')||'').trim();
-try{await separarEstoque(c.id,linhas,'solicitada',{prazo,status:'separada'},'Separada',obs);closeModal();toast(`${nr(c.num)} separada. O militar foi avisado.`);}
+const obsLog=[naoAt.length?'Não atendido (sem estoque): '+naoAt.map(x=>`${x.qtd}× ${x.nome}${tamTxt(x.tam)?' ('+x.tam+')':''}`).join(', '):'',obs].filter(Boolean).join(' | ');
+try{await separarEstoque(c.id,linhas,'solicitada',{prazo,status:'separada',naoAtendidos:naoAt},naoAt.length?'Separada parcialmente':'Separada',obsLog);closeModal();toast(`${nr(c.num)} separada${naoAt.length?' em parte':''}. O militar foi avisado.`);}
 catch(e){console.error(e);$('#sep-erro').textContent=erroFirebase(e);}
 }
 /* Baixa o disponível de cada tamanho e grava a cautela, numa transação única */
@@ -745,14 +947,16 @@ async function separarEstoque(cautId,linhas,statusEsperado,extra,acao,obs){
 await runTransaction(db,async tx=>{
 const cref=doc(db,'cautelas',cautId);const cs=await tx.get(cref);const o=cs.data();
 if(!o||o.status!==statusEsperado)throw {msg:'Este pedido mudou de situação (talvez o militar tenha cancelado). Feche e confira.'};
-const ids=[...new Set(linhas.map(l=>l.itemId))];const snaps={};
+const orig=statusEsperado==='solicitada'?(o.itens||[]):[];
+const ids=[...new Set(linhas.map(l=>l.itemId).concat(orig.map(l=>l.itemId)))];const snaps={};
 for(const iid of ids){snaps[iid]=(await tx.get(doc(db,'itens',iid))).data();}
 const falta=[];
-ids.forEach(iid=>{const it=snaps[iid];const e=JSON.parse(JSON.stringify(it.estoque||{}));
+ids.forEach(iid=>{const it=snaps[iid];if(!it)return;const r={...(it.reservado||{})};orig.filter(l=>l.itemId===iid).forEach(l=>{r[l.tam]=Math.max(0,int(r[l.tam]||0)-l.qtd);if(!r[l.tam])delete r[l.tam];});snaps[iid]._resv=r;});
+ids.forEach(iid=>{const it=snaps[iid];if(!it)return;const e=JSON.parse(JSON.stringify(it.estoque||{}));
 linhas.filter(l=>l.itemId===iid).forEach(l=>{const x=e[l.tam]||{total:0,disp:0};if(x.disp<l.qtd)falta.push(`${it.nome}${tamTxt(l.tam)?' ('+l.tam+')':''}: só ${x.disp}`);x.disp-=l.qtd;e[l.tam]=x;});
 snaps[iid]._novo=e;});
 if(falta.length)throw {msg:'Estoque insuficiente – '+falta.join('; ')};
-ids.forEach(iid=>tx.update(doc(db,'itens',iid),{estoque:snaps[iid]._novo}));
+ids.forEach(iid=>{if(snaps[iid])tx.update(doc(db,'itens',iid),{estoque:snaps[iid]._novo,...(orig.length?{reservado:snaps[iid]._resv}:{})});});
 tx.update(cref,{...extra,itens:linhas,atualizadoEm:nowISO(),separadoPor:sess.userId,log:[...(o.log||[]),entrada(acao,obs)]});
 });
 }
@@ -761,8 +965,12 @@ const c=C(id);if(!c)return;
 openModal('Recusar '+nr(c.num),`<form id="f-recusar" data-id="${c.id}" class="stack"><label class="f"><span>Motivo (o militar vai ver)</span><textarea class="i" name="m" required placeholder="Ex.: sem estoque do tamanho; procure o almoxarifado"></textarea></label><button class="btn btn-warn btn-block">Recusar pedido</button></form>`);
 }
 async function confirmarRecusa(form,fd){
-const c=C(form.dataset.id);if(!c)return;
-await updateDoc(doc(db,'cautelas',c.id),{status:'recusada',atualizadoEm:nowISO(),log:[...(c.log||[]),entrada('Recusada',String(fd.get('m')||''))]});closeModal();toast('Pedido recusado.');
+const c=C(form.dataset.id);if(!c)return;const m=String(fd.get('m')||'');
+await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',c.id);const o=(await tx.get(cref)).data();
+if(!o||o.status!=='solicitada')throw {msg:'Este pedido mudou de situação.'};
+const sn=await lerItensTx(tx,[...new Set(o.itens.map(l=>l.itemId))]);liberarReservaTx(tx,sn,o.itens);
+tx.update(cref,{status:'recusada',atualizadoEm:nowISO(),log:[...(o.log||[]),entrada('Recusada',m)]});});
+closeModal();toast('Pedido recusado.');
 }
 async function cancelarSep(id){
 const c=C(id);if(!c||c.status!=='separada')return;
@@ -823,7 +1031,7 @@ ui.bal={userId:'',linhas:[],q:''};desenharBalcao();
 }
 function desenharBalcao(){
 const b=ui.bal;const u=b.userId?user(b.userId):null;
-const mil=D.users.filter(x=>x.ativo).sort((a,c)=>nomeU(a).localeCompare(nomeU(c),'pt-BR'));
+const mil=D.users.filter(x=>x.ativo&&x.perfil!=='almox'&&x.id!==(me().vinculo||'')).sort((a,c)=>nomeU(a).localeCompare(nomeU(c),'pt-BR'));
 const its=ordenarItens(D.itens.filter(i=>i.ativo!==false).slice());
 openModal('Cautela no balcão',`<form id="f-bal" class="stack" autocomplete="off">
 <label class="f"><span>Militar</span><select class="i" name="mil" data-chg="balMil"><option value="">Escolha…</option>${mil.map(x=>`<option value="${x.id}" ${x.id===b.userId?'selected':''}>${esc(nomeU(x))} – ${esc(turmaU(x))}</option>`).join('')}</select></label>
@@ -877,11 +1085,13 @@ const devTxt=(c,mov)=>mov.map(x=>{const l=c.itens[x.i]||{};return `${x.q}× ${l.
 const devAguardaMilitar=c=>c.status==='cautelada'&&!!c.devPend&&!c.devAss;
 const devAguardaAlmox=c=>c.status==='cautelada'&&!!c.devPend&&!!c.devAss;
 function devolver(id){
-const c=C(id);if(!c)return;const u=user(c.userId);
+const c=C(id);if(!c)return;const u=user(c.userId);const ds=c.devSol;
 const ls=(c.itens||[]).map((l,i)=>({l,i})).filter(x=>pend(x.l)>0);
-openModal('Devolução – '+nr(c.num),`<form id="f-dev" data-id="${c.id}" class="stack"><p><b>${esc(nomeU(u))}</b> <span class="small muted">${esc(turmaU(u))}</span></p>
+const qIni=i=>{if(!ds)return pend(c.itens[i]);const m=ds.mov.find(x=>x.i===i);return m?Math.min(m.q,pend(c.itens[i])):0;};
+openModal((ds?'Conferir devolução pedida – ':'Devolução – ')+nr(c.num),`<form id="f-dev" data-id="${c.id}" class="stack"><p><b>${esc(nomeU(u))}</b> <span class="small muted">${esc(turmaU(u))}</span></p>
+${ds?`<p class="aviso small">O militar pediu e assinou no app, em ${fmt(ds.em)}: <b>${esc(ds.txt)}</b>${ds.obs?' – '+esc(ds.obs):''}. Confira o material. Se estiver igual ao pedido e em bom estado, a assinatura dele já vale e você só assina para concluir.</p>`:''}
 ${ls.map(({l,i})=>`<div class="linha-item"><span class="nm">${esc(l.nome)}${tamTxt(l.tam)?` <span class="tag">${esc(l.tam)}</span>`:''} <span class="small muted">(${pend(l)} em uso)</span></span>
-<input class="i" type="number" name="q${i}" min="0" max="${pend(l)}" value="${pend(l)}" aria-label="Quantidade devolvida">
+<input class="i" type="number" name="q${i}" min="0" max="${pend(l)}" value="${qIni(i)}" aria-label="Quantidade devolvida">
 <select class="i estado-sel" name="e${i}"><option value="bom">Em bom estado</option><option value="danificado">Danificado / inservível</option><option value="extraviado">Extraviado (não devolvido)</option></select></div>`).join('')}
 <label class="f"><span>Observação (obrigatória se houver dano ou extravio)</span><input class="i" name="obs"></label>
 <p class="small muted">Depois de registrar, ${esc(nomeU(u))} assina a devolução no próprio celular (em "Início") e você assina por último para concluir. Só então o estoque é atualizado.</p>
@@ -894,9 +1104,14 @@ if(!mov.length){$('#dev-erro').textContent='Informe a quantidade devolvida.';ret
 if(mov.some(x=>x.e!=='bom')&&!obs){$('#dev-erro').textContent='Descreva o dano ou o extravio na observação.';return;}
 const em=nowISO();const txt=devTxt(c,mov);
 const devPend={mov,obs,txt,em,por:sess.userId};
-try{await updateDoc(doc(db,'cautelas',id),{devPend,devAss:null,atualizadoEm:em,log:[...(c.log||[]),{t:em,a:'Devolução registrada',por:sess.userId,obs:txt+(obs?' | '+obs:'')+' | aguardando assinatura do militar'}]});}
+// Conferência igual ao pedido assinado no app (mesmas peças, tudo em bom estado): a assinatura do militar no pedido vale para a devolução
+const ds=c.devSol;const igual=!!ds&&mov.every(x=>x.e==='bom')&&mov.length===ds.mov.length&&mov.every(x=>ds.mov.some(y=>y.i===x.i&&y.q===x.q));
+const devAss=igual?{...ds.assinatura,origem:'pedido no app'}:null;
+if(igual&&ds.obs&&!obs)devPend.obs=ds.obs;
+try{await updateDoc(doc(db,'cautelas',id),{devPend,devAss,devSol:null,atualizadoEm:em,log:[...(c.log||[]),{t:em,a:'Devolução conferida pelo almoxarifado',por:sess.userId,obs:txt+(obs?' | '+obs:'')+(igual?' | igual ao pedido assinado pelo militar':ds?' | diferente do pedido: aguardando nova assinatura do militar':' | aguardando assinatura do militar')}]});}
 catch(e){$('#dev-erro').textContent=erroFirebase(e);return;}
-D.cautelas=D.cautelas.map(x=>x.id===id?{...x,devPend,devAss:null}:x);
+D.cautelas=D.cautelas.map(x=>x.id===id?{...x,devPend,devAss,devSol:null}:x);
+if(igual){assinarDevAlmox(id);return;}
 if(modo==='balcao')assDevBalcao(id);
 else{closeModal();toast(`Devolução registrada. ${nomeM(c.userId)} foi avisado para assinar no celular.`);}
 }
@@ -1101,32 +1316,95 @@ openModal('Com quem está – '+esc(it.nome),l.length?`<div class="tbl-wrap"><ta
 /* ============ Militares ============ */
 function vMilitares(){
 const q=norm(ui.mq);const pc=pendCad();
-let l=D.users.filter(u=>!u.pendente&&(!q||norm(nomeU(u)+' '+u.nome+' '+turmaU(u)+' '+u.email+' '+(u.rg||'')).includes(q)));
+let l=D.users.filter(u=>!u.pendente&&u.perfil!=='almox'&&(!q||norm(nomeU(u)+' '+u.nome+' '+turmaU(u)+' '+u.email+' '+(u.rg||'')+' '+(u.cpf||'')).includes(q)));
 l.sort((a,b)=>(b.ativo-a.ativo)||nomeU(a).localeCompare(nomeU(b),'pt-BR'));
 const emUso=id=>ativasA().filter(c=>c.userId===id).reduce((a,c)=>a+(c.itens||[]).reduce((b,x)=>b+pend(x),0),0);
-let h=`<div class="a-head"><div><h1>Militares</h1><p>${D.users.filter(u=>u.ativo).length} com acesso liberado</p></div><div class="row"><button class="btn" data-act="csvMil">Exportar romaneios (CSV)</button><button class="btn btn-pri" data-act="novoMil">+ Cadastrar oficial de fora da EsFO</button></div></div>`;
+let h=`<div class="a-head"><div><h1>Militares</h1><p>${D.users.filter(u=>u.ativo&&u.perfil!=='almox').length} com acesso liberado</p></div><div class="row"><button class="btn" data-act="csvMil">Exportar romaneios (CSV)</button><button class="btn btn-pri" data-act="novoMil">+ Cadastrar oficial de fora da EsFO</button></div></div>`;
 if(pc.length)h+=`<div class="sec-h"><h2>Aguardando liberação</h2></div>`+pc.map(u=>`<div class="card" style="margin-bottom:.6rem"><div class="card-t"><div><p style="font-weight:600">${esc(nomeU(u))} <span class="tag">${u.perfil==='almox'?'Conta do almoxarifado':u.tipo==='oficial'?'Oficial':'Cadete'}</span></p>
 <p class="small muted">${esc(u.nome)} · ${esc(u.email)}</p><p class="small muted">Cadastro em ${fmt(u.criadoEm)}</p></div>
 <div class="row"><button class="btn btn-sm btn-warn" data-act="negarCad" data-id="${u.id}">Recusar</button><button class="btn btn-sm btn-pri" data-act="liberar" data-id="${u.id}">Liberar</button></div></div></div>`).join('');
-h+=`<div class="filters" style="margin-top:1rem"><input class="i" data-inp="mq" placeholder="Buscar por nome, pelotão, RG ou e-mail" value="${esc(ui.mq)}"></div>
-<div class="tbl-wrap"><table><thead><tr><th>Militar</th><th>Turma / OPM</th><th>Peças em uso</th><th>Situação</th></tr></thead><tbody>
+h+=secGestores();
+h+=`<div class="sec-h"><h2>Cadetes e oficiais</h2></div><div class="filters"><input class="i" data-inp="mq" placeholder="Buscar por nome, Companhia, pelotão, CPF, RG ou e-mail" value="${esc(ui.mq)}"></div>
+<div class="tbl-wrap"><table><thead><tr><th>Militar</th><th>Companhia / OPM</th><th>Peças em uso</th><th>Situação</th></tr></thead><tbody>
 ${l.map(u=>`<tr class="hov" data-act="verMil" data-id="${u.id}"><td>${esc(nomeU(u))}<br><span class="small muted">${esc(u.nome)}</span></td><td>${esc(turmaU(u))||'<span class="muted">dados incompletos</span>'}</td><td>${emUso(u.id)||'—'}</td>
-<td>${u.perfil==='almox'?'<span class="tag">Almoxarifado</span> ':''}${u.externo?'<span class="tag">Oficial externo</span> ':''}${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Sem acesso</span>'}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Ninguém encontrado.</td></tr>'}
+<td>${D.users.some(g=>g.perfil==='almox'&&g.ativo&&g.vinculo===u.id)?'<span class="tag">Gestor do almox</span> ':''}${u.externo?'<span class="tag">Oficial externo</span> ':''}${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Sem acesso</span>'}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">Ninguém encontrado.</td></tr>'}
 </tbody></table></div>`;
 return h;
+}
+/* ----- Gestores do almoxarifado e convites ----- */
+const convitesAbertos=()=>(D.convites||[]).filter(c=>!c.usado&&!c.cancelado&&c.expiraMs>Date.now()).sort((a,b)=>b.expiraMs-a.expiraMs);
+function secGestores(){
+const pr=ehPrincipal();const gs=D.users.filter(u=>u.perfil==='almox').sort((a,b)=>(b.ativo-a.ativo)||nomeU(a).localeCompare(nomeU(b),'pt-BR'));
+const cvs=convitesAbertos();
+let h=`<div class="sec-h"><h2>Gestores do almoxarifado</h2>${pr?'<button class="btn btn-sm btn-pri" data-act="convidar" data-id="">+ Convidar gestor</button>':''}</div>
+<p class="small muted" style="margin:-.3rem 0 .6rem">Cada gestor tem uma conta própria (usuário e senha), separada da conta de cadete dele. Um gestor não atende as cautelas da própria conta de cadete: quem atende é outro gestor.${pr?'':' Só o gestor principal convida, desativa ou vincula gestores.'}</p>
+<div class="tbl-wrap"><table><thead><tr><th>Gestor</th><th>Usuário</th><th>Conta de cadete vinculada</th><th>Situação</th></tr></thead><tbody>
+${gs.map(u=>`<tr class="hov" data-act="verMil" data-id="${u.id}"><td>${esc(nomeU(u))}${u.principal||(D.setup&&D.setup.por===u.id)?' <span class="tag">principal</span>':''}<br><span class="small muted">${esc(u.nome||'')}</span></td><td class="mono">${esc(usuarioDe(u))}</td>
+<td>${u.vinculo?esc(nomeM(u.vinculo)):'<span class="muted">—</span>'}</td><td>${u.ativo?'<span class="pill ok">Ativo</span>':'<span class="pill no">Desativado</span>'}</td></tr>`).join('')}
+</tbody></table></div>`;
+if(pr&&cvs.length)h+=`<div class="pend-box" style="margin-top:.6rem"><p><b>Convites aguardando uso</b></p><ul class="feed">${cvs.map(c=>`<li><span class="mono" style="font-size:1.05rem;font-weight:700">${esc(codFmt(c.id))}</span> – ${esc(((c.grad?c.grad+' ':'')+(c.guerra||'')).trim())}${c.cadeteId?' (conta de cadete vinculada)':''}<br><span class="small">vale até ${fmt(new Date(c.expiraMs).toISOString())}</span> <button class="link small" data-act="cancelarConvite" data-id="${c.id}">cancelar</button><time></time></li>`).join('')}</ul></div>`;
+return h;
+}
+/* O gestor principal gera o convite. Com cadete: o convite já leva o nome e o vínculo com a conta de cadete. */
+function convidar(cadeteId){
+if(!ehPrincipal())return;const u=cadeteId?user(cadeteId):null;
+openModal('Convidar gestor do almoxarifado',`<form id="f-convite" data-cad="${cadeteId||''}" class="stack" autocomplete="off">
+${u?`<div class="ficha"><p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(u.nome||'')} · ${esc(turmaU(u))}</p></div>
+<p class="small">A conta de gestor ficará <b>vinculada</b> à conta de cadete acima: ${esc(nomeU(u))} não poderá atender as próprias cautelas.</p>`
+:`<p class="small muted">Para convidar um cadete, abra o nome dele na lista de militares e toque em "Convidar para gestor do almoxarifado" – assim a conta já fica vinculada. Use esta tela só para quem não tem conta de cadete.</p>${camposIdent({},'cadete')}`}
+<p class="aviso">O sistema gera um <b>código de convite</b> que vale por 24 horas e só pode ser usado uma vez. Entregue o código pessoalmente. Com ele, a pessoa escolhe o usuário e a senha em "Acesso restrito do almoxarifado → Criar conta com convite".</p>
+<p class="erro" id="conv-erro"></p><button class="btn btn-pri btn-block">Gerar código de convite</button></form>`);
+}
+async function salvarConvite(form,fd){
+if(!ehPrincipal())return;const cad=form.dataset.cad||'';const u=cad?user(cad):lerDados(fd,'cadete');
+if(!u.guerra||!u.nome){$('#conv-erro').textContent='Preencha o nome de guerra e o nome completo.';return;}
+const cod=novoCodigo();const em=nowISO();
+await setDoc(doc(db,'convites',cod),{grad:u.grad||'',guerra:u.guerra||'',nome:u.nome||'',cadeteId:cad,criadoPor:sess.userId,criadoEm:em,expiraMs:Date.now()+864e5,usado:false,cancelado:false});
+openModal('Código de convite',`<div class="stack" style="text-align:center"><p>Entregue este código a <b>${esc(((u.grad?u.grad+' ':'')+u.guerra).trim())}</b>:</p>
+<p class="mono" style="font-size:2rem;font-weight:700;letter-spacing:.12em;margin:.4rem 0">${esc(codFmt(cod))}</p>
+<p class="small muted">Vale até ${fmt(new Date(Date.now()+864e5).toISOString())}. Uso único. Na tela de entrada: "Acesso restrito do almoxarifado" → "Criar conta com convite".</p>
+<button type="button" class="btn" data-act="copiarCodigo" data-c="${esc(codFmt(cod))}">Copiar código</button></div>`);
+}
+async function cancelarConvite(id){
+if(!confirm('Cancelar este código de convite?'))return;
+await updateDoc(doc(db,'convites',id),{cancelado:true,canceladoPor:sess.userId,canceladoEm:nowISO()});toast('Convite cancelado.');
+}
+function vincular(id){
+const g=user(id);const cad=D.users.filter(u=>u.perfil!=='almox'&&!u.pendente).sort((a,b)=>nomeU(a).localeCompare(nomeU(b),'pt-BR'));
+openModal('Conta de cadete vinculada',`<form id="f-vinc" data-id="${id}" class="stack"><p>Gestor <b>${esc(nomeU(g))}</b> (<span class="mono">${esc(usuarioDe(g))}</span>)</p>
+<label class="f"><span>Conta de cadete da mesma pessoa</span><select class="i" name="v"><option value="">Nenhuma (não é cadete)</option>${cad.map(u=>`<option value="${u.id}" ${g.vinculo===u.id?'selected':''}>${esc(nomeU(u))} – ${esc(turmaU(u))}</option>`).join('')}</select></label>
+<p class="small muted">Com o vínculo, este gestor não consegue separar, entregar nem receber devolução das cautelas da conta de cadete dele.</p>
+<button class="btn btn-pri btn-block">Salvar</button></form>`);
+}
+async function salvarVinculo(form,fd){
+const id=form.dataset.id;const v=String(fd.get('v')||'');
+await updateDoc(doc(db,'users',id),{vinculo:v,atualizadoEm:nowISO()});closeModal();toast('Vínculo salvo.');
+}
+async function tornarPrincipal(id){
+const u=user(id);if(!confirm(`${nomeU(u)} também vai poder convidar, vincular e desativar gestores. Confirmar?`))return;
+await updateDoc(doc(db,'users',id),{principal:true});closeModal();toast('Agora também é gestor principal.');
 }
 function verMil(id){
 const u=user(id);const cs=D.cautelas.filter(c=>c.userId===id).sort((a,b)=>String(b.criadoEm).localeCompare(String(a.criadoEm)));
 const uso=cs.filter(c=>c.status==='cautelada'||c.status==='separada');
-openModal(esc(nomeU(u)),`<dl class="dados-mil"><dt>Nome</dt><dd>${esc(u.nome)}</dd><dt>RG</dt><dd>${esc(u.rg||'—')}</dd><dt>E-mail</dt><dd>${esc(u.email)}</dd><dt>Telefone</dt><dd>${esc(u.telefone||'—')}</dd>
-<dt>${u.tipo==='oficial'?'OPM':'Turma'}</dt><dd>${esc(u.tipo==='oficial'?u.opm:[u.turma,turmaU(u)].filter(Boolean).join(' · '))}</dd><dt>Perfil</dt><dd>${u.perfil==='almox'?'Almoxarifado':u.tipo==='oficial'?'Oficial':'Cadete'}</dd></dl>
-<div class="sec-h"><h3>Romaneio</h3></div><dl class="dados-mil">${ROM.map(([k,n])=>`<dt>${n}</dt><dd>${esc((u.romaneio||{})[k]||'—')}</dd>`).join('')}</dl>
+const gestor=u.perfil==='almox';const pr=ehPrincipal();
+const gestDele=D.users.filter(x=>x.perfil==='almox'&&x.vinculo===id);
+openModal(esc(nomeU(u)),`<dl class="dados-mil"><dt>Nome</dt><dd>${esc(u.nome)}</dd>
+${gestor?`<dt>Usuário</dt><dd class="mono">${esc(usuarioDe(u))}</dd><dt>Conta de cadete</dt><dd>${u.vinculo?esc(nomeM(u.vinculo)):'<span class="muted">nenhuma vinculada</span>'}</dd><dt>Perfil</dt><dd>Gestor do almoxarifado${u.principal||(D.setup&&D.setup.por===u.id)?' (principal)':''}</dd>`
+:`<dt>${u.tipo==='oficial'?'OPM':'Companhia'}</dt><dd>${esc(u.tipo==='oficial'?(u.opm||'—'):(turmaU(u)||'—'))}</dd>
+<dt>CPF</dt><dd>${u.cpf?`<span id="cpf-${id}">${esc(cpfMask(u.cpf))}</span> <button type="button" class="link small" data-act="verCpf" data-id="${id}">mostrar</button>`:'—'}</dd><dt>RG</dt><dd>${esc(u.rg||'—')}</dd>
+<dt>E-mail institucional</dt><dd>${esc(u.email)}</dd><dt>E-mail pessoal</dt><dd>${esc(u.emailPessoal||'—')}</dd><dt>Telefone</dt><dd>${esc(u.telefone||'—')}</dd>
+<dt>Perfil</dt><dd>${u.tipo==='oficial'?'Oficial':'Cadete'}${gestDele.length?` · também é gestor do almoxarifado (${gestDele.map(g=>esc(usuarioDe(g))).join(', ')})`:''}</dd>`}</dl>
+${gestor?'':`<div class="sec-h"><h3>Romaneio</h3></div><dl class="dados-mil">${ROM.map(([k,n])=>`<dt>${n}</dt><dd>${esc((u.romaneio||{})[k]||'—')}</dd>`).join('')}</dl>
 <div class="sec-h"><h3>Cautelas em aberto</h3><span class="muted small">${uso.length}</span></div>${uso.map(c=>cardCautela(c)).join('')||'<p class="muted small">Nenhuma. Pode emitir o "nada consta".</p>'}
-${cs.length>uso.length?`<p class="small muted">${cs.length-uso.length} cautela(s) encerrada(s) no histórico.</p>`:''}`,
-`<button class="btn" data-act="nadaConsta" data-id="${id}">${uso.length?'Pendências (PDF)':'Nada consta (PDF)'}</button>
+${cs.length>uso.length?`<p class="small muted">${cs.length-uso.length} cautela(s) encerrada(s) no histórico.</p>`:''}`}`,
+`${gestor?'':`<button class="btn" data-act="nadaConsta" data-id="${id}">${uso.length?'Pendências (PDF)':'Nada consta (PDF)'}</button>`}
 <button class="btn" data-act="editMil" data-id="${id}">Editar dados</button>
-${id!==sess.userId?`<button class="btn" data-act="perfilMil" data-id="${id}">${u.perfil==='almox'?'Tirar do almoxarifado':'Tornar almoxarife'}</button>
-<button class="btn ${u.ativo?'btn-warn':''}" data-act="ativoMil" data-id="${id}">${u.ativo?'Bloquear acesso':'Liberar acesso'}</button>`:''}`);
+${pr&&!gestor&&u.ativo&&!gestDele.some(g=>g.ativo)?`<button class="btn" data-act="convidar" data-id="${id}">Convidar para gestor do almoxarifado</button>`:''}
+${pr&&gestor?`<button class="btn" data-act="vincular" data-id="${id}">Conta de cadete vinculada</button>`:''}
+${pr&&gestor&&id!==sess.userId&&!u.principal?`<button class="btn" data-act="tornarPrincipal" data-id="${id}">Tornar gestor principal</button>`:''}
+${pr&&gestor&&id!==sess.userId&&!ehFicticio(u.email)?`<button class="btn" data-act="perfilMil" data-id="${id}">Tirar do almoxarifado</button>`:''}
+${id!==sess.userId&&(pr||!gestor)?`<button class="btn ${u.ativo?'btn-warn':''}" data-act="ativoMil" data-id="${id}">${u.ativo?(gestor?'Desativar conta de gestor':'Bloquear acesso'):'Liberar acesso'}</button>`:''}`);
 }
 function editMil(id){
 const u=user(id);
@@ -1134,20 +1412,21 @@ openModal('Editar – '+esc(nomeU(u)),`<form id="f-editmil" data-id="${id}" clas
 }
 async function salvarMil(form,fd){
 const u=user(form.dataset.id);const d=lerDados(fd,u.tipo);
+const falha=conferirDados(d,u.tipo,false);if(falha){$('#em-erro').textContent=falha;return;}
 try{await updateDoc(doc(db,'users',u.id),{...d,atualizadoEm:nowISO()});closeModal();toast('Dados salvos.');}catch(e){$('#em-erro').textContent=erroFirebase(e);}
 }
 /* Cadastro feito pelo almoxarife (oficial de fora da EsFO ou exceções), como o "Cadastrar manualmente" do SICAM.
    O próprio oficial digita a senha: é com ela que ele assina a cautela no balcão. */
 function formNovoMil(){
 openModal('Cadastrar oficial de fora da EsFO',`<form id="f-novomil" class="stack" autocomplete="off">
-<p class="aviso">Faça o cadastro com o oficial presente. Ele mesmo digita a senha no fim: é com ela que vai assinar as cautelas no balcão.</p>
+<p class="aviso">Faça o cadastro com o oficial presente. Ele mesmo digita a senha no fim: é com ela que vai assinar as cautelas no balcão. Mostre a ele a ${linkPriv()}.</p>
 ${camposIdent({},'oficial')}
-<div class="grid2"><label class="f"><span>RG</span><input class="i" name="rg" required inputmode="numeric"></label><label class="f"><span>OPM / unidade</span><input class="i" name="opm" required placeholder="Ex.: 12º BPM"></label></div>
-<label class="f"><span>Telefone (WhatsApp)</span><input class="i" name="telefone" inputmode="tel"></label>
+${camposComp({},'oficial',true)}
 <label class="f"><span>E-mail (de preferência o institucional)</span><input class="i" name="email" type="email" required autocapitalize="off"></label>
 <details><summary class="small">Romaneio (opcional)</summary>${camposRom({})}</details>
 <div class="grid2"><label class="f"><span>Senha do oficial (mín. 8)</span><input class="i" name="senha" type="password" required minlength="8" autocomplete="new-password"></label>
 <label class="f"><span>Repita a senha</span><input class="i" name="senha2" type="password" required minlength="8" autocomplete="new-password"></label></div>
+<label class="check"><input type="checkbox" name="lgpd" required><span>O oficial leu a Política de Privacidade e autorizou o uso dos dados dele para o controle de cautela do almoxarifado.</span></label>
 <p class="erro" id="nm-erro"></p><button class="btn btn-pri btn-block">Cadastrar oficial</button></form>`);
 }
 async function salvarNovoMil(form,fd){
@@ -1156,10 +1435,11 @@ const email=String(fd.get('email')||'').trim().toLowerCase();
 if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))return err('E-mail inválido.');
 if(fd.get('senha')!==fd.get('senha2'))return err('As senhas não conferem.');
 const d=lerDados(fd,'oficial');
+const falha=conferirDados(d,'oficial',true);if(falha)return err(falha);
 let uid;
 try{uid=await comAuthSecundario(async a2=>{const c=await createUserWithEmailAndPassword(a2,email,String(fd.get('senha')));try{if(dominioOk(email))await sendEmailVerification(c.user);}catch(e){}return c.user.uid;});}
 catch(e){return err(e.code==='auth/email-already-in-use'?'Já existe uma conta com esse e-mail. Procure o oficial na lista de militares.':erroFirebase(e));}
-await setDoc(doc(db,'users',uid),{...d,tipo:'oficial',externo:true,email,perfil:'cadete',ativo:true,pendente:false,criadoEm:nowISO(),criadoPor:sess.userId,lgpd:nowISO()});
+await setDoc(doc(db,'users',uid),{...d,tipo:'oficial',externo:true,email,perfil:'cadete',ativo:true,pendente:false,criadoEm:nowISO(),criadoPor:sess.userId,lgpd:nowISO(),privacidade:{versao:PRIV_VER,em:nowISO()}});
 closeModal();toast(`${d.grad} ${d.guerra} cadastrado. Já pode receber cautela no balcão.`);
 }
 async function liberar(id){const u=user(id);if(u.perfil==='almox'&&!confirm(`${nomeU(u)} pediu conta do ALMOXARIFADO: vai poder separar, entregar, receber devoluções e mexer no estoque. Liberar?`))return;await updateDoc(doc(db,'users',id),{ativo:true,pendente:false,liberadoPor:sess.userId,liberadoEm:nowISO()});toast('Acesso liberado.');}
@@ -1169,11 +1449,23 @@ await updateDoc(doc(db,'users',id),{ativo:!u.ativo,pendente:false});closeModal()
 async function perfilMil(id){const u=user(id);const novo=u.perfil==='almox'?'cadete':'almox';
 if(!confirm(novo==='almox'?`${nomeU(u)} vai poder separar, entregar, receber devolução e mexer no estoque. Confirmar?`:`Tirar ${nomeU(u)} do almoxarifado?`))return;
 await updateDoc(doc(db,'users',id),{perfil:novo});closeModal();toast('Perfil alterado.');}
-/* Diretório resumido: só o necessário para escolher o destino de uma transferência (sem RG, telefone ou romaneio) */
+/* Reservas: confere o reservado de cada item com os pedidos que ainda aguardam separação e corrige diferenças.
+   Roda no painel do almoxarifado, alguns segundos depois da última mudança. */
+let resvTimer=null;
+function sincronizarReservas(){
+if(!ehAlmox())return;clearTimeout(resvTimer);
+resvTimer=setTimeout(async()=>{
+const esp={};solicitadas().forEach(c=>(c.itens||[]).forEach(l=>{esp[l.itemId]=esp[l.itemId]||{};esp[l.itemId][l.tam]=(esp[l.itemId][l.tam]||0)+l.qtd;}));
+const lim=o=>JSON.stringify(Object.entries(o||{}).filter(([,v])=>int(v)>0).map(([k,v])=>[k,int(v)]).sort());
+for(const it of D.itens){const e=esp[it.id]||{};if(lim(e)===lim(it.reservado))continue;
+try{await updateDoc(doc(db,'itens',it.id),{reservado:e});}catch(x){console.warn('reserva',x);}}
+},4000);
+}
+/* Diretório resumido: só o necessário para escolher o destino de uma transferência (sem CPF, RG, telefone ou romaneio; sem contas de gestor) */
 let dirUltimo='';
 async function publicarDiretorio(){
 if(!ehAlmox())return;
-const lista=D.users.filter(u=>u.ativo).map(u=>({id:u.id,grad:u.grad||'',guerra:u.guerra||'',nome:u.nome||'',tipo:u.tipo||'cadete',ano:u.ano||'',pelotao:u.pelotao||'',opm:u.opm||''}))
+const lista=D.users.filter(u=>u.ativo&&u.perfil!=='almox').map(u=>({id:u.id,grad:u.grad||'',guerra:u.guerra||'',nome:u.nome||'',tipo:u.tipo||'cadete',ano:u.ano||'',cia:u.cia||'',subturma:u.subturma||'',pelotao:u.pelotao||'',opm:u.opm||''}))
 .sort((a,b)=>a.id.localeCompare(b.id));
 const j=JSON.stringify(lista);if(j===dirUltimo)return;
 const atual=JSON.stringify(((D.dirDoc||{}).lista)||[]);if(j===atual){dirUltimo=j;return;}
@@ -1212,8 +1504,8 @@ const l=[['Nº','Militar','Situação','Origem','Item','Tamanho','Qtd','Devolvid
 baixar(`almox-esfo-historico-${hoje()}.csv`,csv(l),'text/csv;charset=utf-8');
 }
 function csvMil(){
-const l=[['Graduação/posto','Nome de guerra','Nome completo','RG','Tipo','Ano','Pelotão','Turma','OPM','E-mail','Telefone',...ROM.map(r=>r[1]),'Situação']];
-D.users.forEach(u=>l.push([u.grad,u.guerra,u.nome,u.rg,u.tipo,u.ano,u.pelotao,u.turma,u.opm,u.email,u.telefone,...ROM.map(([k])=>(u.romaneio||{})[k]||''),u.ativo?'Ativo':u.pendente?'Pendente':'Sem acesso']));
+const l=[['Graduação/posto','Nome de guerra','Nome completo','CPF','RG','Tipo','Companhia','Turma','Pelotão','OPM','E-mail institucional','E-mail pessoal','Telefone',...ROM.map(r=>r[1]),'Situação']];
+D.users.filter(u=>u.perfil!=='almox').forEach(u=>l.push([u.grad,u.guerra,u.nome,cpfFmt(u.cpf||''),u.rg,u.tipo,u.cia?(CIAS.find(x=>x[0]===u.cia)||[0,u.cia])[1]:(u.ano?u.ano+'º ano':''),u.subturma||'',u.pelotao,u.opm,u.email,u.emailPessoal||'',u.telefone,...ROM.map(([k])=>(u.romaneio||{})[k]||''),u.ativo?'Ativo':u.pendente?'Pendente':'Sem acesso']));
 baixar(`almox-esfo-militares-${hoje()}.csv`,csv(l),'text/csv;charset=utf-8');
 }
 async function backup(){
@@ -1318,7 +1610,7 @@ cat:el=>{ui.cat=el.dataset.id;render();},
 tam:el=>{ui.tamSel=ui.tamSel||{};ui.tamSel[el.dataset.id]=el.dataset.t;render();},
 addCart:el=>addCart(el.dataset.id),
 abrirPedido:abrirPedido,
-cartQ:el=>{const x=ui.cart[+el.dataset.i];if(!x)return;x.qtd=Math.max(0,Math.min(5,x.qtd+(+el.dataset.d)));if(!x.qtd)ui.cart.splice(+el.dataset.i,1);if(ui.cart.length)abrirPedido();else closeModal();},
+cartQ:el=>{const x=ui.cart[+el.dataset.i];if(!x)return;if(+el.dataset.d>0&&x.qtd>=livre(item(x.itemId),x.tam)){toast(`Só há ${livre(item(x.itemId),x.tam)} disponível(is).`,true);return;}x.qtd=Math.max(0,Math.min(5,x.qtd+(+el.dataset.d)));if(!x.qtd)ui.cart.splice(+el.dataset.i,1);if(ui.cart.length)abrirPedido();else closeModal();},
 cartRm:el=>{ui.cart.splice(+el.dataset.i,1);if(ui.cart.length)abrirPedido();else closeModal();},
 limparCart:()=>{ui.cart=[];closeModal();},
 enviarPedido:enviarPedido,
@@ -1326,6 +1618,9 @@ ver:el=>verCautela(el.dataset.id),
 cancelarPedido:el=>{if(confirm('Cancelar este pedido?'))cancelarPedido(el.dataset.id);},
 assinar:el=>assinar(el.dataset.id),
 transferir:el=>transferir(el.dataset.id),
+pedirDev:el=>pedirDev(el.dataset.id),
+cancelarPedDev:el=>cancelarPedDev(el.dataset.id),
+marcarTodos:el=>{$$(`.mb input[type=checkbox][name="${el.dataset.f}c"]`).forEach(i=>i.checked=true);},
 desistirTrf:el=>desistirTrf(el.dataset.id),
 aceitarTrf:el=>aceitarTrf(el.dataset.id),
 recusarTrf:el=>{if(confirm('Recusar esta transferência?'))recusarTrf(el.dataset.id);},
@@ -1366,6 +1661,12 @@ verMil:el=>verMil(el.dataset.id),
 editMil:el=>editMil(el.dataset.id),
 ativoMil:el=>ativoMil(el.dataset.id),
 perfilMil:el=>perfilMil(el.dataset.id),
+convidar:el=>convidar(el.dataset.id||''),
+cancelarConvite:el=>cancelarConvite(el.dataset.id),
+vincular:el=>vincular(el.dataset.id),
+tornarPrincipal:el=>tornarPrincipal(el.dataset.id),
+verCpf:el=>{const u=user(el.dataset.id);const sp=$('#cpf-'+el.dataset.id);if(sp)sp.textContent=cpfFmt(u.cpf||'');el.remove();},
+copiarCodigo:async el=>{try{await navigator.clipboard.writeText(el.dataset.c);toast('Código copiado.');}catch(e){toast('Não foi possível copiar. Anote o código.',true);}},
 nadaConsta:el=>nadaConstaPDF(el.dataset.id),
 importar:()=>abrirImportar(),
 modeloImp:()=>baixarModelo(),
@@ -1374,21 +1675,25 @@ confirmarImp:()=>confirmarImp(),
 histTudo:carregarHistTudo,
 csvUso:csvUso,csvHist:csvHist,csvMil:csvMil,backup:backup
 };
+const ATOS_GESTOR=new Set(['separar','confirmarSep','recusar','cancelarSep','entregar','assBalcao','devolver','registrarDev','assDevBalcao','assDevAlmox','cancelarDev','prazo']);
 document.addEventListener('click',e=>{
 const el=e.target.closest('[data-act]');if(!el)return;
 const f=acts[el.dataset.act];if(!f)return;
 if(el.tagName==='A')e.preventDefault();
+if(ATOS_GESTOR.has(el.dataset.act)&&ehAlmox()&&minhaVinc(C(el.dataset.id))){toast('Esta cautela é da sua conta de cadete: outro gestor deve atender.',true);return;}
 Promise.resolve().then(()=>f(el)).catch(err=>{console.error(err);toast(erroFirebase(err),true);});
 });
 const forms={
 'f-login':(f,fd)=>fazerLogin(fd),
 'f-cad':(f,fd)=>fazerCadastro(f,fd,false),
 'f-setup':(f,fd)=>fazerCadastro(f,fd,true),
-'f-esq':async(f,fd)=>{if(!String(fd.get('email')).includes('@')){$('#esq-erro').textContent='Contas por usuário não recebem e-mail: peça ao responsável pelo almoxarifado para criar uma nova.';return;}try{await sendPasswordResetEmail(auth,String(fd.get('email')).trim().toLowerCase());closeModal();toast('Se o e-mail estiver cadastrado, o link para nova senha foi enviado.');}catch(e){$('#esq-erro').textContent=erroFirebase(e);}},
+'f-gestor':(f,fd)=>fazerCadastroGestor(f,fd),
+'f-esq':async(f,fd)=>{if(!String(fd.get('email')).includes('@')){$('#esq-erro').textContent='Contas de gestor (por usuário) não recebem e-mail: peça um novo código de convite ao gestor principal do almoxarifado.';return;}try{await sendPasswordResetEmail(auth,String(fd.get('email')).trim().toLowerCase());closeModal();toast('Se o e-mail estiver cadastrado, o link para nova senha foi enviado.');}catch(e){$('#esq-erro').textContent=erroFirebase(e);}},
 'f-senha':(f,fd)=>salvarSenha(fd),
 'f-perfil':(f,fd)=>salvarPerfil(fd),
 'f-ass':(f,fd)=>assinarComSenha(fd),
 'f-trf':(f,fd)=>confirmarTransf(f,fd),
+'f-peddev':(f,fd)=>confirmarPedDev(f,fd),
 'f-recusar':(f,fd)=>confirmarRecusa(f,fd),
 'f-assbal':(f,fd)=>confirmarAssBalcao(f,fd),
 'f-assdevbal':(f,fd)=>confirmarAssDevBalcao(f,fd),
@@ -1399,18 +1704,26 @@ const forms={
 'f-aj':(f,fd)=>salvarAjuste(f,fd),
 'f-editmil':(f,fd)=>salvarMil(f,fd),
 'f-novomil':(f,fd)=>salvarNovoMil(f,fd),
+'f-convite':(f,fd)=>salvarConvite(f,fd),
+'f-vinc':(f,fd)=>salvarVinculo(f,fd),
+'f-priv':()=>aceitarPriv(),
 'f-pedido':()=>enviarPedido(),
 'f-bal':()=>balAdd()
 };
 document.addEventListener('submit',e=>{
 const f=e.target;const h=forms[f.id]||(f.dataset&&f.dataset.rel?gerarRelatorio:null);if(!h)return;e.preventDefault();
 const btn=f.querySelector('button:not([type=button])');if(btn&&btn.disabled)return;
-if(btn&&f.id!=='f-cad'&&f.id!=='f-setup')btn.disabled=true;
+if(btn&&f.id!=='f-cad'&&f.id!=='f-setup'&&f.id!=='f-gestor')btn.disabled=true;
 Promise.resolve().then(()=>h(f,new FormData(f))).catch(err=>{console.error(err);toast(erroFirebase(err),true);}).finally(()=>{if(btn&&document.body.contains(btn))btn.disabled=false;});
 });
 document.addEventListener('input',e=>{
+const mk=e.target.dataset&&e.target.dataset.mask;
+if(mk){const el=e.target,d=soNum(el.value);let v;
+if(mk==='cpf'){const x=d.slice(0,11);v=x.length>9?`${x.slice(0,3)}.${x.slice(3,6)}.${x.slice(6,9)}-${x.slice(9)}`:x.length>6?`${x.slice(0,3)}.${x.slice(3,6)}.${x.slice(6)}`:x.length>3?`${x.slice(0,3)}.${x.slice(3)}`:x;}
+else{const x=d.slice(0,11);v=x.length>6?`(${x.slice(0,2)}) ${x.slice(2,x.length===11?7:6)}-${x.slice(x.length===11?7:6)}`:x.length>2?`(${x.slice(0,2)}) ${x.slice(2)}`:x;}
+if(v!==el.value)el.value=v;return;}
+if(e.target.dataset&&e.target.dataset.chg==='convite'){verConvite(e.target.value);return;}
 const k=e.target.dataset&&e.target.dataset.inp;if(!k)return;
-if(k==='trfq'){filtrarTrf(e.target.value);return;}
 ui[k]=e.target.value;render();
 });
 document.addEventListener('change',e=>{
@@ -1425,15 +1738,16 @@ if(k==='balObs')ui.bal.obs=e.target.value;
 /* ============ Firebase: sessão e dados ao vivo ============ */
 function pararEscutas(){unsubs.forEach(u=>{try{u();}catch(e){}});unsubs=[];loaded={};}
 const prevSt=new Map();
-const chaveSt=c=>[c.status,c.assinatura?1:0,c.devPend?1:0,c.devAss?1:0].join('|');
+const chaveSt=c=>[c.status,c.assinatura?1:0,c.devPend?1:0,c.devAss?1:0,c.devSol?1:0].join('|');
 function avisosCautelas(snap,admin){
 snap.docChanges().forEach(ch=>{const c={id:ch.doc.id,...ch.doc.data()};const ant=prevSt.get(c.id);const k=chaveSt(c);prevSt.set(c.id,k);
 if(ch.type==='removed'||ant===k)return;const antAss=ant?ant.split('|')[1]:'0',antDev=ant?ant.split('|')[2]:'0',antDevA=ant?ant.split('|')[3]:'0';
 if(admin){if(c.status==='solicitada'&&!ant)avisar('Novo pedido',`${nomeM(c.userId)} – ${itensTxt(c)}`);
 if(c.status==='separada'&&c.assinatura&&ant&&antAss==='0')avisar('Recebimento assinado',`${nomeM(c.userId)} – ${nr(c.num)}. Assine a entrega.`);
-if(devAguardaAlmox(c)&&ant&&antDevA==='0')avisar('Devolução assinada pelo militar',`${nomeM(c.userId)} – ${nr(c.num)}. Assine para concluir.`);}
+if(devAguardaAlmox(c)&&ant&&antDevA==='0'&&!(c.devAss&&c.devAss.origem))avisar('Devolução assinada pelo militar',`${nomeM(c.userId)} – ${nr(c.num)}. Assine para concluir.`);
+if(c.devSol&&ant&&ant.split('|')[4]!=='1')avisar('Pedido de devolução',`${nomeM(c.userId)} – ${nr(c.num)}: ${c.devSol.txt}`);}
 else if(ant){if(devAguardaMilitar(c)&&antDev==='0')avisar('Devolução para assinar',`${nr(c.num)}: ${c.devPend.txt}. Abra o Início para assinar.`);
-if(c.status==='separada'&&!c.assinatura)avisar('Material separado',`${nr(c.num)} pronto para retirada. Assine ao receber.`);
+if(c.status==='separada'&&!c.assinatura)avisar('Material separado',`${nr(c.num)} pronto para retirada${(c.naoAtendidos||[]).length?' (parte do pedido sem estoque)':''}. Assine ao receber.`);
 if(c.status==='recusada')avisar('Pedido recusado',nr(c.num));
 if(c.status==='devolvida')avisar('Devolução registrada',nr(c.num));}
 });
@@ -1444,13 +1758,13 @@ const adm=perfil==='almox',uid=sess.userId;prevSt.clear();baldes.ativas=[];balde
 const corte=new Date(Date.now()-HIST_DIAS*864e5).toISOString();
 const fontes=adm?[['users',collection(db,'users')],['cats',collection(db,'categorias')],['itens',collection(db,'itens')],
 ['ativas',query(collection(db,'cautelas'),where('status','in',['solicitada','separada','cautelada']))],['recentes',query(collection(db,'cautelas'),where('atualizadoEm','>=',corte))],
-['setup',doc(db,'config','setup')],['dir',doc(db,'config','diretorio')]]
+['setup',doc(db,'config','setup')],['dir',doc(db,'config','diretorio')],['convites',collection(db,'convites')]]
 :[['eu',doc(db,'users',uid)],['cats',collection(db,'categorias')],['itens',collection(db,'itens')],['minhas',query(collection(db,'cautelas'),where('userId','==',uid))],
 ['trfIn',query(collection(db,'cautelas'),where('transferPara','==',uid))],['dir',doc(db,'config','diretorio')]];
 const nomes=fontes.map(f=>f[0]);
 fontes.forEach(([nome,ref])=>{
-const pronto=()=>{if(loaded[nome])return;loaded[nome]=true;if(nomes.every(n=>loaded[n])){fase='app';render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();}}};
-const depois=prim=>{if(prim)pronto();else if(fase==='app'){if(!modal.open)render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();}}};
+const pronto=()=>{if(loaded[nome])return;loaded[nome]=true;if(nomes.every(n=>loaded[n])){fase='app';render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();sincronizarReservas();}pedirAceitePriv();}};
+const depois=prim=>{if(prim)pronto();else if(fase==='app'){if(!modal.open)render();if(adm){publicarDiretorio();semearCatalogo();migrarCatalogo();sincronizarReservas();}}};
 const falha=err=>{console.error(nome,err);if(err.code==='permission-denied'&&(nome==='eu'||nome==='users')){loginMsg='Sem permissão de acesso. Procure o almoxarifado.';signOut(auth);return;}
 if(nome==='dir'||nome==='trfIn'||nome==='setup'){pronto();return;}toast(erroFirebase(err),true);pronto();};
 if(ref.type==='document'){
@@ -1466,12 +1780,13 @@ if(nome==='users'){if(!prim)snap.docChanges().forEach(ch=>{const u=ch.doc.data()
 D.users=arr;const eu=D.users.find(u=>u.id===uid);if(!eu||!eu.ativo||eu.perfil!=='almox'){if(eu&&eu.ativo){aoMudarLogin(auth.currentUser);return;}loginMsg='Seu acesso foi bloqueado.';signOut(auth);return;}}
 else if(nome==='cats')D.cats=ordenarCats(arr);
 else if(nome==='itens'){D.itens=arr;ordenarItens(D.itens);}
+else if(nome==='convites'){D.convites=arr;}
 else if(nome==='trfIn'){if(!prim)snap.docChanges().forEach(ch=>{if(ch.type==='added'){const c=ch.doc.data();avisar('Transferência para você',`${nomeM(c.userId)} quer transferir material. Abra o Início para aceitar.`);}});D.trfIn=arr;}
 else{if(prim)snap.docs.forEach(d=>prevSt.set(d.id,chaveSt(d.data())));else avisosCautelas(snap,adm);
 baldes[nome]=arr;D.cautelas=juntarCautelas();if(ui.histTudo)D.cautelas=[...new Map([...baldes.tudo,...D.cautelas].map(c=>[c.id,c])).values()];}
 depois(prim);
 },err=>{
-if(nome==='trfIn'||nome==='recentes'){console.warn(nome,err);baldes[nome]=[];pronto();return;}
+if(nome==='trfIn'||nome==='recentes'||nome==='convites'){console.warn(nome,err);if(nome!=='convites')baldes[nome]=[];pronto();return;}
 falha(err);}));
 });
 }
@@ -1667,8 +1982,8 @@ T.texto(`Declaro que recebi do Almoxarifado da Escola de Formação de Oficiais 
 T.secao('Assinatura eletrônica do militar');T.kv('Assinado por',nomeM(a.por||c.userId));T.kv('Data e hora',fmt(a.em));T.kv('Forma',FORMA[a.metodo]||a.metodo||'');T.kv('Código (SHA-256)',a.hash);T.kv('Texto assinado',a.dados);
 const aa=c.assinaturaAlmox;if(aa){T.secao('Assinatura eletrônica do almoxarifado');T.kv('Assinado por',nomeM(aa.por));T.kv('Data e hora',fmt(aa.em));T.kv('Forma',FORMA_ALM[aa.metodo]||aa.metodo||'');T.kv('Código (SHA-256)',aa.hash);T.kv('Texto assinado',aa.dados);}
 (c.devolucoes||[]).forEach((d,i)=>{T.secao(`Devolução (descautela)${c.devolucoes.length>1?' '+(i+1):''}`,fmt(d.em));T.kv('Material devolvido',d.material);T.kv('Observação',d.obs);
-T.kv('Militar',`${nomeM(d.militar.por)} – ${FORMA.balcao}`);T.kv('Código do militar',d.militar.hash);
-T.kv('Almoxarifado',`${nomeM(d.almox.por)} – com a senha do Almox EsFO`);T.kv('Código do almoxarifado',d.almox.hash);});
+T.kv('Militar',`${nomeM(d.militar.por)} – ${FORMA[d.militar.metodo]||d.militar.metodo}${d.militar.origem?' ('+d.militar.origem+')':''}`);T.kv('Código do militar',d.militar.hash);
+T.kv('Almoxarifado',`${nomeM(d.almox.por)} – ${FORMA_ALM[d.almox.metodo]||d.almox.metodo}`);T.kv('Código do almoxarifado',d.almox.hash);});
 if((c.log||[]).length){T.secao('Andamento');T.tabela([{t:'Data',w:1.5},{t:'Evento',w:2.2},{t:'Por',w:2},{t:'Observação',w:3.5}],c.log.map(x=>[fmt(x.t),x.a,nomeM(x.por),x.obs||'']));}
 });
 }
