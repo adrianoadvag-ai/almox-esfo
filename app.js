@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.0';
+const VERSAO='1.5.1';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -161,7 +161,7 @@ const s=e.state;if(!s||!s.almox)return;
 if(!sess){
 if(fase==='cadastro'&&s.fase!=='cadastro')fase='login';else if(fase==='login'&&s.fase==='cadastro')fase='cadastro';
 if(fase==='login'||fase==='cadastro'){ui.tela=s.tela;loginMsg='';}
-}else{ui.view=s.v;ui.cat=s.cat;ui.matCat=s.matCat;ui.matQ='';}
+}else{ui.view=s.v;ui.cat=s.cat;ui.matCat=s.matCat;ui.matQ='';ui.solQ='';}
 render();window.scrollTo(0,0);
 });
 
@@ -386,27 +386,39 @@ if(!dadosCompletos(u))h=boxCompletar()+h;
 return h;
 }
 const boxCompletar=()=>`<div class="aviso" style="margin-bottom:.8rem">Atualize seus dados e o <b>romaneio</b> quando puder: com as suas medidas o sistema já sugere o tamanho certo de cada peça. <button class="link" data-act="go" data-v="pf">Atualizar agora</button></div>`;
-function vSolicitar(){
-const u=me();
-const cats=D.cats.filter(c=>D.itens.some(i=>i.catId===c.id&&i.ativo!==false));
-if(ui.cat&&!cats.some(c=>c.id===ui.cat))ui.cat=null;
-if(!ui.cat){
-if(!cats.length)return `<div class="empty">Nenhum material cadastrado ainda.</div>`;
-return `<div class="sec-h"><h2>O que você precisa?</h2></div><div class="cat-grid2">${cats.map(c=>{const n=D.itens.filter(i=>i.catId===c.id&&i.ativo!==false).length;
-return `<button class="cat-tile" data-act="catSol" data-id="${c.id}"><span class="cat-ic">${svgCat(icCat(c))}</span><h3>${esc(c.nome)}</h3><span class="n">${n} ${n===1?'item':'itens'}</span></button>`;}).join('')}</div>`;}
-const c=cats.find(x=>x.id===ui.cat);
-let h=`<button class="voltar" data-act="catSol" data-id="">← Categorias</button><div class="cat-topo"><span class="cat-ic">${svgCat(icCat(c))}</span><h2>${esc(c.nome)}</h2></div>`;
-const its=D.itens.filter(i=>i.catId===ui.cat&&i.ativo!==false);
-h+=its.map(it=>{
+/* Busca de material: aceita várias palavras, sem diferenciar acentos (ex.: "tunica chumbo p") */
+const casaBusca=(it,q)=>{const alvo=norm(it.nome+' '+cat(it.catId).nome+' '+(it.tamanhos||[]).join(' '));return norm(q).split(/\s+/).filter(Boolean).every(p=>alvo.includes(p));};
+const campoBusca=ph=>`<div class="busca-mat"><input class="i" type="search" data-inp="solQ" value="${esc(ui.solQ||'')}" placeholder="${ph}" autocomplete="off" enterkeyhint="search" aria-label="Pesquisar material">${ui.solQ?'<button type="button" class="busca-x" data-act="limparBusca" aria-label="Limpar pesquisa">×</button>':''}</div>`;
+function cardItemSol(it,u,comCat){
 const sug=sugTam(it,u);const sel=(ui.tamSel||{})[it.id]||sug||(it.tamanhos||[])[0];
 const unico=(it.tamanhos||[]).length<=1;
 const noCart=ui.cart.filter(x=>x.itemId===it.id).reduce((a,x)=>a+x.qtd,0);
-return `<div class="card" style="margin-bottom:.6rem"><div class="eq"><div><h3>${esc(it.nome)}</h3>
+return `<div class="card" style="margin-bottom:.6rem"><div class="eq"><div>${comCat?`<p class="small muted">${esc(cat(it.catId).nome)}</p>`:''}<h3>${esc(it.nome)}</h3>
 <p class="avail">${it.consumo?'Entrega definitiva (não precisa devolver)':'Cautela com devolução'} · ${esc((UNID[it.unidade]||UNID.un)[0])}${it.campo&&!sug?` · <button class="link" data-act="go" data-v="pf">informe seu tamanho no romaneio</button>`:''}</p></div>
 <button class="btn btn-pri btn-sm" data-act="addCart" data-id="${it.id}">Adicionar</button></div>
 ${unico?'':`<div class="tam-sel" role="group" aria-label="Tamanho">${(it.tamanhos||[]).map(t=>{const d=est(it,t).disp;return `<button type="button" data-act="tam" data-id="${it.id}" data-t="${esc(t)}" aria-pressed="${t===sel}" class="${t===sug?'sug':''}" title="${d>0?'Disponível':'Sem estoque no momento'}">${esc(t)}${d>0?'':'<span class="se" aria-label="sem estoque">•</span>'}</button>`;}).join('')}</div>${sug?`<p class="small muted" style="margin-top:.3rem">Sublinhado em dourado: seu tamanho pelo romaneio (${esc(sug)}).</p>`:''}`}
 ${est(it,sel).disp<=0?`<p class="small c-brass" style="margin-top:.3rem">${unico?'Sem estoque no momento':'Tamanho '+esc(sel)+' sem estoque no momento'}: você pode pedir mesmo assim, e o almoxarifado avisa quando separar.</p>`:''}
-${noCart?`<p class="small c-ok" style="margin-top:.3rem">${noCart} no pedido</p>`:''}</div>`;}).join('');
+${noCart?`<p class="small c-ok" style="margin-top:.3rem">${noCart} no pedido</p>`:''}</div>`;
+}
+function vSolicitar(){
+const u=me();const q=String(ui.solQ||'').trim();
+const ativos=D.itens.filter(i=>i.ativo!==false);
+const cats=D.cats.filter(c=>ativos.some(i=>i.catId===c.id));
+if(ui.cat&&!cats.some(c=>c.id===ui.cat))ui.cat=null;
+if(!ui.cat){
+if(!cats.length)return `<div class="empty">Nenhum material cadastrado ainda.</div>`;
+let h=`<div class="sec-h"><h2>O que você precisa?</h2></div>${campoBusca('Pesquisar material (ex.: luva, túnica, platina)')}`;
+if(q){const r=ordenarItens(ativos.filter(it=>casaBusca(it,q)));
+return h+`<p class="small muted" style="margin:-.2rem 0 .6rem">${r.length} ${r.length===1?'material encontrado':'materiais encontrados'}</p>`+(r.length?r.map(it=>cardItemSol(it,u,true)).join(''):'<div class="empty">Nenhum material com esse nome. Tente outra palavra.</div>');}
+return h+`<div class="cat-grid2">${cats.map(c=>{const n=ativos.filter(i=>i.catId===c.id).length;
+return `<button class="cat-tile" data-act="catSol" data-id="${c.id}"><span class="cat-ic">${svgCat(icCat(c))}</span><h3>${esc(c.nome)}</h3><span class="n">${n} ${n===1?'item':'itens'}</span></button>`;}).join('')}</div>`;}
+const c=cats.find(x=>x.id===ui.cat);
+let h=`<button class="voltar" data-act="catSol" data-id="">← Categorias</button><div class="cat-topo"><span class="cat-ic">${svgCat(icCat(c))}</span><h2>${esc(c.nome)}</h2></div>`;
+const todos=ativos.filter(i=>i.catId===ui.cat);
+h+=campoBusca(`Pesquisar em ${c.nome}`);
+const its=q?todos.filter(it=>casaBusca(it,q)):todos;
+if(q)h+=`<p class="small muted" style="margin:-.2rem 0 .6rem">${its.length} de ${todos.length} ${todos.length===1?'item':'itens'}</p>`;
+h+=its.length?its.map(it=>cardItemSol(it,u,false)).join(''):'<div class="empty">Nenhum item com esse nome nesta categoria.</div>';
 return h;
 }
 function addCart(id){
@@ -1269,7 +1281,8 @@ novaCat:()=>formCat(null),
 editCat:el=>formCat(D.cats.find(c=>c.id===el.dataset.id)),
 novoItem:el=>{if(!D.cats.length){toast('Crie uma categoria primeiro.',true);return;}formItem(null,el.dataset.cat||ui.matCat||'');},
 matCat:el=>{const id=el.dataset.id||null;if(!id&&!modal.open&&history.state&&history.state.matCat){history.back();return;}navegar(()=>{ui.matCat=id;ui.matQ='';});},
-catSol:el=>{const id=el.dataset.id||null;if(!id&&!modal.open&&history.state&&history.state.cat){history.back();return;}navegar(()=>{ui.cat=id;});},
+catSol:el=>{const id=el.dataset.id||null;ui.solQ='';if(!id&&!modal.open&&history.state&&history.state.cat){history.back();return;}navegar(()=>{ui.cat=id;});},
+limparBusca:()=>{ui.solQ='';render();const i=document.querySelector('[data-inp="solQ"]');if(i)i.focus();},
 editItem:el=>formItem(item(el.dataset.id)),
 entrada:el=>formEntrada(el.dataset.id),
 ajuste:el=>{ui.ajModo='baixa';formAjuste(el.dataset.id);},
