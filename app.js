@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.4';
+const VERSAO='1.5.5';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -1296,7 +1296,7 @@ catch(e){console.error(e);migrando=false;}
 
 /* ============ Eventos ============ */
 const acts={
-go:el=>navegar(()=>{ui.view=el.dataset.v;}),
+go:el=>navegar(()=>{ui.view=el.dataset.v;ui.matCat=null;ui.matQ='';ui.cat=null;ui.solQ='';}),
 fechar:closeModal,
 recarregar:()=>location.reload(),
 sair:async()=>{closeModal();ui.view=null;ui.cart=[];await signOut(auth);},
