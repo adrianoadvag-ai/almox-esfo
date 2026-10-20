@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.1';
+const VERSAO='1.5.2';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -502,7 +502,7 @@ let acoes='';
 if(adm){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="recusar" data-id="${c.id}">Recusar</button><button class="btn btn-pri" data-act="separar" data-id="${c.id}">Separar material</button>`;
 if(c.status==='separada'){acoes+=`<button class="btn btn-warn" data-act="cancelarSep" data-id="${c.id}">Cancelar e devolver ao estoque</button>`;
-acoes+=a?`<button class="btn btn-pri" data-act="entregar" data-id="${c.id}">Confirmar entrega</button>`:`<button class="btn btn-pri" data-act="assBalcao" data-id="${c.id}">Assinar no balcão (senha do militar)</button>`;}
+acoes+=a?`<button class="btn btn-pri" data-act="entregar" data-id="${c.id}">Assinar e entregar</button>`:`<button class="btn btn-pri" data-act="assBalcao" data-id="${c.id}">Assinar no balcão (senha do militar)</button>`;}
 if(c.status==='cautelada'&&pendentes(c).length)acoes+=`<button class="btn" data-act="prazo" data-id="${c.id}">Prazo</button><button class="btn btn-pri" data-act="devolver" data-id="${c.id}">Registrar devolução</button>`;
 }else if(meu){
 if(c.status==='solicitada')acoes+=`<button class="btn btn-warn" data-act="cancelarPedido" data-id="${c.id}">Cancelar pedido</button>`;
@@ -514,7 +514,8 @@ openModal(`Cautela ${nr(c.num)}`,`<div class="ficha">${stamp(c,true)}<p style="f
 ${itensLi(c)}
 <dl class="meta"><dt>Origem</dt><dd>${c.origem==='balcao'?'Cautela no balcão':c.origem==='transferencia'?`Transferência de ${esc(nomeM(c.deUser))} (${nr(c.deNum)})`:'Pedido pelo app'}</dd>
 ${c.status!=='solicitada'?`<dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'sem prazo definido'}</dd>`:''}
-${a?`<dt>Assinatura</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>`:''}
+${a?`<dt>Assinatura do militar</dt><dd>${fmt(a.em)}, ${esc(FORMA[a.metodo]||a.metodo)}</dd>`:''}
+${c.assinaturaAlmox?`<dt>Assinatura do almoxarifado</dt><dd>${esc(nomeM(c.assinaturaAlmox.por))}, ${fmt(c.assinaturaAlmox.em)}, ${esc(FORMA_ALM[c.assinaturaAlmox.metodo]||c.assinaturaAlmox.metodo)}</dd>`:''}
 ${c.obs?`<dt>Obs.</dt><dd>${esc(c.obs)}</dd>`:''}
 ${c.transferPara?`<dt>Transferência</dt><dd>oferecida a ${esc(nomeM(c.transferPara))}, aguardando aceite</dd>`:''}</dl></div>
 ${(c.ocorrencias||[]).length?`<div class="sec-h"><h3>Ocorrências na devolução</h3></div><ul class="feed">${c.ocorrencias.map(o=>`<li>${o.qtd}× ${esc(o.nome)}${tamTxt(o.tam)?' ('+esc(o.tam)+')':''} – <b class="c-stamp">${esc(o.estado)}</b>${o.obs?' – '+esc(o.obs):''}<time>${fmt(o.t)}</time></li>`).join('')}</ul>`:''}
@@ -530,6 +531,7 @@ catch(e){toast(erroFirebase(e),true);}
 /* ============ Assinatura: senha do Almox EsFO, ou digital / Face ID / senha do celular ============ */
 let assPend=null,bioRecente=null;
 const temBioAqui=()=>{const u=me();const id=u&&bioLocal(u.id);return !!(bioOk&&id&&((u.passkeys||[]).some(k=>k.id===id)||bioRecente===id));};
+const FORMA_ALM={senha:'com a senha do Almox EsFO',biometria:'com digital, Face ID ou senha do aparelho'};
 const FORMA={senha:'com a senha do Almox EsFO, no celular do militar',biometria:'com digital, Face ID ou senha do celular do militar',balcao:'com a senha do militar, no aparelho do almoxarifado'};
 function textoAssinatura(c,em,acao){
 return `ALMOX ESFO | ${acao} | Cautela ${nr(c.num)} | ${nomeM(sess.userId)} | Material: ${itensTxt(c)} | Prazo: ${c.prazo?fmtD(c.prazo):'sem prazo'} | ${em}`;
@@ -762,13 +764,23 @@ ids.forEach(iid=>{const e=JSON.parse(JSON.stringify(sn[iid].estoque||{}));o.iten
 tx.update(cref,{status:'cancelada',atualizadoEm:nowISO(),log:[...(o.log||[]),entrada('Cancelada pelo almoxarifado','Peças devolvidas ao estoque')]});});
 closeModal();toast('Cautela cancelada e estoque devolvido.');}catch(e){toast(erroFirebase(e),true);}
 }
-async function entregar(id){
+/* Entrega: o responsável pelo almoxarifado também assina (senha ou digital/Face ID) */
+function assinarEntrega(id){
+const c=C(id);if(!c||c.status!=='separada'||!c.assinatura)return;const u=user(c.userId);
+pedirAssinatura({titulo:'Assinar entrega – '+nr(c.num),sub:'Assinatura do responsável pelo almoxarifado.',rotulo:'Assinar entrega',
+corpo:`<div class="ficha"><p style="font-weight:600">${esc(nomeU(u))}</p><p class="small muted">${esc(turmaU(u))}</p>${itensLi(c)}<dl class="meta"><dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'sem prazo definido'}</dd><dt>Militar assinou</dt><dd>${fmt(c.assinatura.em)}</dd></dl></div>
+<p class="aviso">Declaro que entreguei a ${esc(nomeU(u))} o material acima, conferido em tamanhos, quantidades e estado de conservação.</p>`,
+dados:em=>`ALMOX ESFO | Entrega (almoxarifado) | Cautela ${nr(c.num)} | Entregue por ${nomeM(sess.userId)} a ${nomeU(u)} | Material: ${itensTxt(c)} | Prazo: ${c.prazo?fmtD(c.prazo):'sem prazo'} | ${em}`,
+onOk:async ass=>{await entregar(id,ass);}});
+}
+async function entregar(id,assAlm){
 const c=C(id);if(!c||c.status!=='separada'||!c.assinatura)return;
+if(!assAlm){assinarEntrega(id);return;}
 try{await runTransaction(db,async tx=>{const cref=doc(db,'cautelas',id);const o=(await tx.get(cref)).data();if(!o||o.status!=='separada'||!o.assinatura)throw {msg:'A cautela mudou de situação.'};
 const cons=o.itens.filter(l=>l.consumo);const ids=[...new Set(cons.map(l=>l.itemId))];const sn={};for(const iid of ids)sn[iid]=(await tx.get(doc(db,'itens',iid))).data();
 ids.forEach(iid=>{const e=JSON.parse(JSON.stringify(sn[iid].estoque||{}));cons.filter(l=>l.itemId===iid).forEach(l=>{const x=e[l.tam]||{total:0,disp:0};x.total=Math.max(0,x.total-l.qtd);e[l.tam]=x;});tx.update(doc(db,'itens',iid),{estoque:e});});
 const final=o.itens.every(l=>l.consumo);
-tx.update(cref,{status:final?'concluida':'cautelada',entregueEm:nowISO(),entreguePor:sess.userId,atualizadoEm:nowISO(),log:[...(o.log||[]),entrada(final?'Entregue (definitivo)':'Cautelada','Entrega confirmada pelo almoxarifado')]});});
+tx.update(cref,{status:final?'concluida':'cautelada',entregueEm:assAlm.em,entreguePor:sess.userId,assinaturaAlmox:assAlm,atualizadoEm:nowISO(),log:[...(o.log||[]),{t:assAlm.em,a:'Assinada pelo almoxarifado',por:sess.userId,obs:FORMA_ALM[assAlm.metodo]||assAlm.metodo},entrada(final?'Entregue (definitivo)':'Cautelada','Entrega assinada pelo militar e pelo almoxarifado')]});});
 closeModal();toast(`${nr(c.num)} entregue.`);}catch(e){toast(erroFirebase(e),true);}
 }
 /* A senha do militar digitada no aparelho do almoxarifado confirma a identidade sem trocar a sessão atual */
@@ -782,7 +794,7 @@ openModal('Assinatura no balcão – '+nr(c.num),`<form id="f-assbal" data-id="$
 <div class="ficha"><p style="font-weight:600">${esc(nomeU(u))}</p>${itensLi(c)}<dl class="meta"><dt>Devolver até</dt><dd>${c.prazo?fmtD(c.prazo):'sem prazo definido'}</dd></dl></div>
 <p class="aviso">Entregue o aparelho ao militar. Ao digitar a senha, ${esc(nomeU(u))} declara que recebeu o material acima, conferiu tamanhos e quantidades e se responsabiliza pela guarda e devolução.</p>
 <label class="f"><span>Senha do Almox EsFO de ${esc(nomeU(u))}</span><input class="i" type="password" name="s" required autocomplete="off"></label>
-<p class="erro" id="assbal-erro"></p><button class="btn btn-pri btn-block">Assinar e entregar</button>
+<p class="erro" id="assbal-erro"></p><button class="btn btn-pri btn-block">Assinar (militar) e seguir para a sua assinatura</button>
 <p class="small muted">Ou feche esta janela: o militar também pode assinar no próprio celular, em "Início".</p></form>`);
 }
 async function confirmarAssBalcao(form,fd){
@@ -1589,7 +1601,8 @@ T.secao('Militar');T.kv('Militar',`${nomeU(u)} – ${u.nome||''}`);T.kv('RG',u.r
 T.kv('Devolver até',c.prazo?fmtD(c.prazo):'Sem prazo definido');T.kv('Situação',(ST[c.status]||[c.status])[0]);
 T.secao('Material');T.tabela([{t:'Item',w:5},{t:'Tamanho',w:1.4},{t:'Qtd',w:.8,a:'r'},{t:'Devolvido',w:1.2,a:'r'},{t:'Transferido',w:1.3,a:'r'}],(c.itens||[]).map(x=>[x.nome+(x.consumo?' (entrega definitiva)':''),tamTxtPdf(x.tam),x.qtd,x.dev||0,x.trf||0]));
 T.texto(`Declaro que recebi do Almoxarifado da Escola de Formação de Oficiais o material acima relacionado, em perfeitas condições de uso, comprometendo-me a zelar por sua guarda e conservação e a devolvê-lo ${c.prazo?'até '+fmtD(c.prazo):'quando solicitado'}, ciente de que responderei pelo extravio ou dano causado por mau uso.`,{s:9.5});
-T.secao('Assinatura eletrônica');T.kv('Assinado por',nomeM(a.por||c.userId));T.kv('Data e hora',fmt(a.em));T.kv('Forma',FORMA[a.metodo]||a.metodo||'');T.kv('Código (SHA-256)',a.hash);T.kv('Texto assinado',a.dados);
+T.secao('Assinatura eletrônica do militar');T.kv('Assinado por',nomeM(a.por||c.userId));T.kv('Data e hora',fmt(a.em));T.kv('Forma',FORMA[a.metodo]||a.metodo||'');T.kv('Código (SHA-256)',a.hash);T.kv('Texto assinado',a.dados);
+const aa=c.assinaturaAlmox;if(aa){T.secao('Assinatura eletrônica do almoxarifado');T.kv('Assinado por',nomeM(aa.por));T.kv('Data e hora',fmt(aa.em));T.kv('Forma',FORMA_ALM[aa.metodo]||aa.metodo||'');T.kv('Código (SHA-256)',aa.hash);T.kv('Texto assinado',aa.dados);}
 (c.devolucoes||[]).forEach((d,i)=>{T.secao(`Devolução (descautela)${c.devolucoes.length>1?' '+(i+1):''}`,fmt(d.em));T.kv('Material devolvido',d.material);T.kv('Observação',d.obs);
 T.kv('Militar',`${nomeM(d.militar.por)} – ${FORMA.balcao}`);T.kv('Código do militar',d.militar.hash);
 T.kv('Almoxarifado',`${nomeM(d.almox.por)} – com a senha do Almox EsFO`);T.kv('Código do almoxarifado',d.almox.hash);});
