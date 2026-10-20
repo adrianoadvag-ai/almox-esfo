@@ -8,7 +8,7 @@ import * as CFG from './config.js';
    Almox EsFO – Sistema de cautela de materiais do almoxarifado da EsFO
    Base: SICAM (mesma identidade visual, cadastro e assinatura)
    ===================================================================== */
-const VERSAO='1.5.3';
+const VERSAO='1.5.4';
 const FB=CFG.ALMOX_FIREBASE;
 const DOMINIOS=((CFG.ALMOX_OPCOES&&CFG.ALMOX_OPCOES.dominios)||['pm.pr.gov.br']).map(d=>d.toLowerCase());
 const $=s=>document.querySelector(s);
@@ -1302,9 +1302,8 @@ recarregar:()=>location.reload(),
 sair:async()=>{closeModal();ui.view=null;ui.cart=[];await signOut(auth);},
 tema:el=>{temaAtual=el.dataset.tema;try{localStorage.setItem('almox.tema',temaAtual);}catch(e){}aplicarTema(temaAtual);$$('.tema-sel button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tema===temaAtual));},
 irCadastro:el=>navegar(()=>{loginMsg='';ui.cadPerfil=el.dataset.p||'cadete';fase='cadastro';}),
-tela:el=>{if(el.dataset.t==='cadete'&&history.state&&history.state.tela==='almox'&&!history.state.fase){history.back();return;}
-navegar(()=>{ui.tela=el.dataset.t;loginMsg='';fase='login';});},
-irLogin:()=>{if(history.state&&history.state.fase==='cadastro'){history.back();return;}fase='login';render();marcarTela(true);},
+tela:el=>navegar(()=>{ui.tela=el.dataset.t;loginMsg='';fase='login';}),
+irLogin:()=>navegar(()=>{fase='login';}),
 cadTipo:el=>{ui.cadTipo=el.dataset.t;render();},
 esqueci:()=>openModal('Esqueci minha senha',`<form id="f-esq" class="stack"><label class="f"><span>E-mail institucional</span><input class="i" name="email" type="text" required autocapitalize="off"></label>
 <p class="erro" id="esq-erro"></p><button class="btn btn-pri btn-block">Enviar link para nova senha</button></form>`),
@@ -1352,8 +1351,8 @@ prazo:el=>editarPrazo(el.dataset.id),
 novaCat:()=>formCat(null),
 editCat:el=>formCat(D.cats.find(c=>c.id===el.dataset.id)),
 novoItem:el=>{if(!D.cats.length){toast('Crie uma categoria primeiro.',true);return;}formItem(null,el.dataset.cat||ui.matCat||'');},
-matCat:el=>{const id=el.dataset.id||null;if(!id&&!modal.open&&history.state&&history.state.matCat){history.back();return;}navegar(()=>{ui.matCat=id;ui.matQ='';});},
-catSol:el=>{const id=el.dataset.id||null;ui.solQ='';if(!id&&!modal.open&&history.state&&history.state.cat){history.back();return;}navegar(()=>{ui.cat=id;});},
+matCat:el=>{const id=el.dataset.id||null;navegar(()=>{ui.matCat=id;ui.matQ='';});},
+catSol:el=>{const id=el.dataset.id||null;ui.solQ='';navegar(()=>{ui.cat=id;});},
 limparBusca:()=>{ui.solQ='';render();const i=document.querySelector('[data-inp="solQ"]');if(i)i.focus();},
 editItem:el=>formItem(item(el.dataset.id)),
 entrada:el=>formEntrada(el.dataset.id),
